@@ -28,6 +28,7 @@ unsigned char responses_index;
 char *responses[10];
 unsigned int general_flags;
 
+xSemaphoreHandle request_semaphore_g;
 xSemaphoreHandle long_polling_request_semaphore_g;
 
 /******************************************************************************
@@ -72,113 +73,6 @@ uint32 user_rf_cal_sector_set(void) {
    return rf_cal_sec;
 }
 
-/**
- * @param pin : GPIO pin GPIO_Pin_x
- */
-void pin_output_set(unsigned int pin) {
-   GPIO_REG_WRITE(GPIO_OUT_W1TS_ADDRESS, pin);
-}
-
-/**
- * @param pin : GPIO pin GPIO_Pin_x
- */
-void pin_output_reset(unsigned int pin) {
-   GPIO_REG_WRITE(GPIO_OUT_W1TC_ADDRESS, pin);
-}
-
-/**
- * @param pin : GPIO pin GPIO_Pin_x
- */
-bool read_output_pin_state(unsigned int pin) {
-   return (GPIO_REG_READ(GPIO_OUT_ADDRESS) & pin) ? true : false;
-}
-
-/**
- * @param pin : GPIO pin GPIO_Pin_x
- */
-bool read_input_pin_state(unsigned int pin) {
-   return (GPIO_REG_READ(GPIO_IN_ADDRESS) & pin) ? true : false;
-}
-
-LOCAL void calculate_rom_string_length_or_fill_malloc(unsigned short *string_length, char *result, const char *rom_string) {
-   unsigned char calculate_string_length = *string_length ? 0 : 1;
-   unsigned short calculated_string_length = 0;
-   unsigned int *rom_string_aligned = (unsigned int*) (((unsigned int) (rom_string)) & ~3); // Could be saved in not 4 bytes aligned address
-   unsigned int rom_string_aligned_value = *rom_string_aligned;
-   unsigned char shifted_bytes = (unsigned char) ((unsigned int) (rom_string) - (unsigned int) (rom_string_aligned)); // 0 - 3
-
-   unsigned char shifted_bytes_tmp = shifted_bytes;
-   while (shifted_bytes_tmp < 4) {
-      unsigned int comparable = 0xFF;
-      unsigned char bytes_to_shift = shifted_bytes_tmp * 8;
-      comparable <<= bytes_to_shift;
-      unsigned int current_character_shifted = rom_string_aligned_value & comparable;
-
-      if (current_character_shifted == 0) {
-         break;
-      }
-      shifted_bytes_tmp++;
-
-      if (!calculate_string_length) {
-         char current_character = (char) (current_character_shifted >> bytes_to_shift);
-         *(result + calculated_string_length) = current_character;
-      }
-
-      calculated_string_length++;
-   }
-
-   if (!calculated_string_length) {
-      return;
-   }
-
-   unsigned int *rom_string_aligned_next = rom_string_aligned + 1;
-   while (1) {
-      unsigned int shifted_tmp = 0xFF;
-      unsigned int rom_string_aligned_tmp_value = *rom_string_aligned_next;
-      unsigned char stop = 0;
-
-      while (shifted_tmp) {
-         unsigned int current_character_shifted = rom_string_aligned_tmp_value & shifted_tmp;
-
-         if (current_character_shifted == 0) {
-            stop = 1;
-            break;
-         }
-
-         if (!calculate_string_length) {
-            unsigned char bytes_to_shift;
-
-            if (shifted_tmp == 0xFF) {
-               bytes_to_shift = 0;
-            } else if (shifted_tmp == 0xFF00) {
-               bytes_to_shift = 8;
-            } else if (shifted_tmp == 0xFF0000) {
-               bytes_to_shift = 16;
-            } else {
-               bytes_to_shift = 24;
-            }
-
-            char current_character = (char) (current_character_shifted >> bytes_to_shift);
-            *(result + calculated_string_length) = current_character;
-         }
-
-         calculated_string_length++;
-         shifted_tmp <<= 8;
-      }
-
-      if (stop) {
-         break;
-      }
-      rom_string_aligned_next++;
-   }
-
-   if (calculate_string_length) {
-      *string_length = calculated_string_length;
-   } else {
-      *(result + *string_length) = '\0';
-   }
-}
-
 LOCAL void milliseconds_counter() {
    milliseconds_g++;
 }
@@ -191,24 +85,6 @@ void start_millisecons_counter() {
 
 void stop_milliseconds_counter() {
    os_timer_disarm(&millisecons_time_serv_g);
-}
-
-/**
- * Do not forget to call free when a string is not required anymore
- */
-char *get_string_from_rom(const char *rom_string) {
-   unsigned short string_length = 0;
-
-   calculate_rom_string_length_or_fill_malloc(&string_length, NULL, rom_string);
-
-   if (!string_length) {
-      return NULL;
-   }
-
-   char *result = malloc(string_length + 1); // 1 for the last empty character
-
-   calculate_rom_string_length_or_fill_malloc(&string_length, result, rom_string);
-   return result;
 }
 
 // Callback function when AP scanning is completed
@@ -259,9 +135,9 @@ void autoconnect_task(void *pvParameters) {
 void ICACHE_FLASH_ATTR print_some_stuff_task(void *pvParameters) {
    vTaskDelay(10000 / portTICK_RATE_MS);
 
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("Address of upgrade_firmware function: 0x%x\n", upgrade_firmware);
-#endif
+   #endif
    upgrade_firmware();
 
    vTaskDelete(NULL);
@@ -288,8 +164,10 @@ void successfull_connected_tcp_handler_callback(void *arg) {
    user_data->request = NULL;
 
    if (sent_status != 0) {
-      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_long_polling_error;
-      execute_on_error(connection);
+      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+      if (execute_on_error) {
+         execute_on_error(connection);
+      }
    }
 }
 
@@ -298,28 +176,31 @@ void successfull_disconnected_tcp_handler_callback(void *arg) {
    struct connection_user_data *user_data = connection->reserve;
    bool response_received = user_data->response_received;
 
-#ifdef ALLOW_USE_PRINTF
-   printf("Disconnected callback beginning. Response received: %d\n", response_received);
-#endif
+   #ifdef ALLOW_USE_PRINTF
+   printf("Disconnected callback beginning. Response%s received\n", response_received ? "" : " is not");
+   #endif
 
-   void (*execute_on_succeed)(struct espconn *connection) = user_data->execute_on_long_polling_succeed;
-   execute_on_succeed(connection);
+   void (*execute_on_succeed)(struct espconn *connection) = user_data->execute_on_succeed;
+   if (execute_on_succeed) {
+      execute_on_succeed(connection);
+   }
 
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("Disconnected callback end\n");
-#endif
+   #endif
 }
 
 void tcp_connection_error_handler_callback(void *arg, sint8 err) {
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("Connection error callback. Error code: %d\n", err);
-#endif
+   #endif
 
    struct espconn *connection = arg;
    struct connection_user_data *user_data = connection->reserve;
-   void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_long_polling_error;
-
-   execute_on_error(connection);
+   void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+   if (execute_on_error) {
+      execute_on_error(connection);
+   }
 }
 
 void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned short len) {
@@ -336,9 +217,9 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
          memcpy(response, pdata, len);
          user_data->response = response;
 
-#ifdef ALLOW_USE_PRINTF
+         #ifdef ALLOW_USE_PRINTF
          printf("Response length: %d, content: %s\n", len, pdata);
-#endif
+         #endif
       }
       free(server_sent);
    }
@@ -356,9 +237,9 @@ void tcp_request_successfully_written_into_buffer_handler_callback() {
 }
 
 void long_polling_request_on_error_callback(struct espconn *connection) {
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("long_polling_request_on_error_callback\n");
-#endif
+   #endif
 
    struct connection_user_data *user_data = connection->reserve;
    char *request = user_data->request;
@@ -367,13 +248,37 @@ void long_polling_request_on_error_callback(struct espconn *connection) {
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG);
    reset_flag(&general_flags, SERVER_IS_AVAILABLE_FLAG);
-   long_polling_request_finish_action(connection);
+   request_finish_action(connection, long_polling_request_semaphore_g);
+}
+
+void request_on_error_callback(struct espconn *connection) {
+   #ifdef ALLOW_USE_PRINTF
+   printf("request_on_error_callback\n");
+   #endif
+
+   struct connection_user_data *user_data = connection->reserve;
+   char *request = user_data->request;
+
+   errors_counter_g++;
+   pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
+   set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
+   reset_flag(&general_flags, SERVER_IS_AVAILABLE_FLAG);
+   request_finish_action(connection, request_semaphore_g);
+}
+
+void check_for_update_firmware(char *response) {
+   char *update_firmware_json_element = get_string_from_rom(UPDATE_FIRMWARE);
+
+   if (strstr(response, update_firmware_json_element)) {
+      set_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
+   }
+   free(update_firmware_json_element);
 }
 
 void long_polling_request_on_succeed_callback(struct espconn *connection) {
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("long_polling_request_on_succeed_callback\n");
-#endif
+   #endif
 
    struct connection_user_data *user_data = connection->reserve;
 
@@ -382,31 +287,41 @@ void long_polling_request_on_succeed_callback(struct espconn *connection) {
       return;
    }
 
-   char *turn_on_true_json_element = get_string_from_rom(TURN_ON_TRUE_JSON_ELEMENT);
+   #ifdef ALLOW_USE_PRINTF
+   printf("Response from long_polling_request_on_succeed_callback:\n%s\n", user_data->response);
+   #endif
 
-#ifdef ALLOW_USE_PRINTF
-   printf("Response from long_polling_request_on_succeed_callback:\n%s", user_data->response);
-#endif
-
-   if (strstr(user_data->response, turn_on_true_json_element)) {
-      pin_output_set(PROJECTOR_RELAY_PIN);
-   } else {
-      pin_output_reset(PROJECTOR_RELAY_PIN);
-   }
-   free(turn_on_true_json_element);
-
-   char *update_firmware_json_element = get_string_from_rom(UPDATE_FIRMWARE);
-   if (strstr(user_data->response, update_firmware_json_element)) {
-      set_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
-   }
-   free(update_firmware_json_element);
+   check_for_update_firmware(user_data->response);
 
    set_flag(&general_flags, SERVER_IS_AVAILABLE_FLAG);
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   long_polling_request_finish_action(connection);
+   request_finish_action(connection, long_polling_request_semaphore_g);
 }
 
-void long_polling_request_finish_action(struct espconn *connection) {
+void request_on_succeed_callback(struct espconn *connection) {
+   #ifdef ALLOW_USE_PRINTF
+   printf("request_on_succeed_callback\n");
+   #endif
+
+   struct connection_user_data *user_data = connection->reserve;
+
+   if (!user_data->response_received) {
+      request_on_error_callback(connection);
+      return;
+   }
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("Response from request_on_succeed_callback:\n%s\n", user_data->response);
+   #endif
+
+   check_for_update_firmware(user_data->response);
+
+   set_flag(&general_flags, SERVER_IS_AVAILABLE_FLAG);
+   pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
+   request_finish_action(connection, request_semaphore_g);
+}
+
+void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphoreToGive) {
    struct connection_user_data *user_data = connection->reserve;
    char *request = user_data->request;
 
@@ -422,40 +337,45 @@ void long_polling_request_finish_action(struct espconn *connection) {
    if (user_data->timeout_request_supervisor_task != NULL) {
       vTaskDelete(user_data->timeout_request_supervisor_task);
 
-#ifdef ALLOW_USE_PRINTF
+      #ifdef ALLOW_USE_PRINTF
       printf("timeout_request_supervisor_task exists\n");
-#endif
+      #endif
    }
    espconn_delete(connection);
-   xSemaphoreGive(long_polling_request_semaphore_g);
+
+   if (semaphoreToGive) {
+      xSemaphoreGive(semaphoreToGive);
+   }
 }
 
 void timeout_request_supervisor_task(void *pvParameters) {
-   vTaskDelay(LONG_POLLING_REQUEST_DURATION_TIME);
-
-#ifdef ALLOW_USE_PRINTF
-   printf("Request timeout\n");
-#endif
-
    struct espconn *connection = pvParameters;
+   struct connection_user_data *user_data = connection->reserve;
+
+   vTaskDelay(user_data->request_max_duration_time);
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("Request timeout\n");
+   #endif
 
    if (connection->state == ESPCONN_CONNECT) {
-#ifdef ALLOW_USE_PRINTF
+      #ifdef ALLOW_USE_PRINTF
       printf("Was connected\n");
-#endif
+      #endif
 
       espconn_disconnect(connection);
    } else {
-#ifdef ALLOW_USE_PRINTF
+      #ifdef ALLOW_USE_PRINTF
       printf("Some another connection timeout error\n");
-#endif
-
-      struct connection_user_data *user_data = connection->reserve;
+      #endif
 
       // To not delete this task in other functions
       user_data->timeout_request_supervisor_task = NULL;
-      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_long_polling_error;
-      execute_on_error(connection);
+
+      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+      if (execute_on_error != NULL) {
+         execute_on_error(connection);
+      }
    }
 
    vTaskDelete(NULL);
@@ -465,16 +385,16 @@ void ota_finished_callback(void *arg) {
    struct upgrade_server_info *update = arg;
 
    if (update->upgrade_flag == true) {
-#ifdef ALLOW_USE_PRINTF
+      #ifdef ALLOW_USE_PRINTF
       printf("[OTA] success; rebooting!\n");
-#endif
+      #endif
 
       system_upgrade_flag_set(UPGRADE_FLAG_FINISH);
       system_upgrade_reboot();
    } else {
-#ifdef ALLOW_USE_PRINTF
+      #ifdef ALLOW_USE_PRINTF
       printf("[OTA] failed!\n");
-#endif
+      #endif
 
       system_restart();
    }
@@ -527,8 +447,70 @@ void upgrade_firmware() {
    system_upgrade_start(upgrade_server);
 }
 
+void send_request(struct espconn *connection) {
+   if (!connection) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("Create connection first\n");
+      #endif
+
+      return;
+   }
+
+   int connection_status = espconn_connect(connection);
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("Connection status: ");
+   #endif
+
+   switch (connection_status) {
+      case ESPCONN_OK:
+         struct connection_user_data *user_data = connection->reserve;
+
+         if (user_data && user_data->timeout_request_supervisor_task) {
+            xTaskCreate(timeout_request_supervisor_task, "timeout_request_supervisor_task", 256, connection, 1, user_data->timeout_request_supervisor_task);
+         }
+
+         #ifdef ALLOW_USE_PRINTF
+         printf("Connected\n");
+         #endif
+
+         break;
+      case ESPCONN_RTE:
+         #ifdef ALLOW_USE_PRINTF
+         printf("Routing problem\n");
+         #endif
+
+         break;
+      case ESPCONN_MEM:
+         #ifdef ALLOW_USE_PRINTF
+         printf("Out of memory\n");
+         #endif
+
+         break;
+      case ESPCONN_ISCONN:
+         #ifdef ALLOW_USE_PRINTF
+         printf("Already connected\n");
+         #endif
+
+         break;
+      case ESPCONN_ARG:
+         #ifdef ALLOW_USE_PRINTF
+         printf("Illegal argument\n");
+         #endif
+
+         break;
+   }
+
+   if (connection_status != ESPCONN_OK) {
+      struct connection_user_data *user_data = connection->reserve;
+
+      if (user_data && user_data->execute_on_error) {
+         user_data->execute_on_error(connection);
+      }
+   }
+}
+
 void send_long_polling_requests_task(void *pvParameters) {
-   //vTaskDelay(5000 / portTICK_RATE_MS);
    for (;;) {
       if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN) && xSemaphoreTake(long_polling_request_semaphore_g, portMAX_DELAY) == pdTRUE) {
          if (read_flag(general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG)) {
@@ -570,9 +552,9 @@ void send_long_polling_requests_task(void *pvParameters) {
          free(request_template);
          free(server_ip_address);
 
-#ifdef ALLOW_USE_PRINTF
+         #ifdef ALLOW_USE_PRINTF
          printf("Request created: %s\n", request);
-#endif
+         #endif
 
          struct espconn connection;
          struct connection_user_data user_data;
@@ -581,8 +563,9 @@ void send_long_polling_requests_task(void *pvParameters) {
          user_data.timeout_request_supervisor_task = NULL;
          user_data.request = request;
          user_data.response = NULL;
-         user_data.execute_on_long_polling_succeed = long_polling_request_on_succeed_callback;
-         user_data.execute_on_long_polling_error = long_polling_request_on_error_callback;
+         user_data.execute_on_succeed = long_polling_request_on_succeed_callback;
+         user_data.execute_on_error = long_polling_request_on_error_callback;
+         user_data.request_max_duration_time = LONG_POLLING_REQUEST_MAX_DURATION_TIME;
          connection.reserve = &user_data;
          connection.type = ESPCONN_TCP;
          connection.state = ESPCONN_NONE;
@@ -601,49 +584,90 @@ void send_long_polling_requests_task(void *pvParameters) {
          espconn_regist_sentcb(&connection, tcp_request_successfully_sent_handler_callback);
          espconn_regist_recvcb(&connection, tcp_response_received_handler_callback);
          //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
-         int connection_status = espconn_connect(&connection);
 
-#ifdef ALLOW_USE_PRINTF
-         printf("Connection status: ");
-#endif
+         send_request(&connection);
+      } else if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
+         pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
+         vTaskDelay(1000 / portTICK_RATE_MS);
+      }
+   }
+}
 
-         switch (connection_status) {
-            case ESPCONN_OK:
-               xTaskCreate(timeout_request_supervisor_task, "timeout_request_supervisor_task", 256, &connection, 1, &user_data.timeout_request_supervisor_task);
+void send_status_requests_task(void *pvParameters) {
+   for (;;) {
+      if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN) && xSemaphoreTake(request_semaphore_g, portMAX_DELAY) == pdTRUE) {
+         if (read_flag(general_flags, REQUEST_ERROR_OCCURRED_FLAG)) {
+            reset_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
 
-#ifdef ALLOW_USE_PRINTF
-               printf("Connected\n");
-#endif
-               break;
-            case ESPCONN_RTE:
-#ifdef ALLOW_USE_PRINTF
-               printf("Routing problem\n");
-#endif
-
-               break;
-            case ESPCONN_MEM:
-#ifdef ALLOW_USE_PRINTF
-               printf("Out of memory\n");
-#endif
-
-               break;
-            case ESPCONN_ISCONN:
-#ifdef ALLOW_USE_PRINTF
-               printf("Already connected\n");
-#endif
-
-               break;
-            case ESPCONN_ARG:
-#ifdef ALLOW_USE_PRINTF
-               printf("Illegal argument\n");
-#endif
-
-               break;
+            vTaskDelay(REQUEST_IDLE_TIME_ON_ERROR);
          }
 
-         if (connection_status != ESPCONN_OK) {
-            long_polling_request_on_error_callback(&connection);
+         if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
+            reset_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
+            upgrade_firmware();
+            continue;
          }
+
+         char signal_strength[4];
+         sprintf(signal_strength, "%d", signal_strength_g);
+         char *device_name = get_string_from_rom(DEVICE_NAME);
+         char errors_counter[5];
+         sprintf(errors_counter, "%d", errors_counter_g);
+         char build_timestamp[30];
+         sprintf(build_timestamp, "%s", __TIMESTAMP__);
+         char *status_info_request_payload_template_parameters[] = {signal_strength, device_name, errors_counter, build_timestamp, NULL};
+         char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD);
+         char *request_payload = set_string_parameters(status_info_request_payload_template, status_info_request_payload_template_parameters);
+
+         free(device_name);
+         free(status_info_request_payload_template);
+
+         char *request_template = get_string_from_rom(STATUS_INFO_POST_REQUEST);
+         unsigned short request_payload_length = strnlen(request_payload, 0xFFFF);
+         char request_payload_length_string[3];
+         sprintf(request_payload_length_string, "%d", request_payload_length);
+         char *server_ip_address = get_string_from_rom(SERVER_IP_ADDRESS);
+         char *request_template_parameters[] = {request_payload_length_string, server_ip_address, request_payload, NULL};
+         char *request = set_string_parameters(request_template, request_template_parameters);
+
+         free(request_payload);
+         free(request_template);
+         free(server_ip_address);
+
+         #ifdef ALLOW_USE_PRINTF
+         printf("Request created: \n<<<%s>>>\n", request);
+         #endif
+
+         struct espconn connection;
+         struct connection_user_data user_data;
+
+         user_data.response_received = false;
+         user_data.timeout_request_supervisor_task = NULL;
+         user_data.request = request;
+         user_data.response = NULL;
+         user_data.execute_on_succeed = request_on_succeed_callback;
+         user_data.execute_on_error = request_on_error_callback;
+         user_data.request_max_duration_time = REQUEST_MAX_DURATION_TIME;
+         connection.reserve = &user_data;
+         connection.type = ESPCONN_TCP;
+         connection.state = ESPCONN_NONE;
+
+         // remote IP of TCP server
+         unsigned char tcp_server_ip[] = {SERVER_IP_ADDRESS_1, SERVER_IP_ADDRESS_2, SERVER_IP_ADDRESS_3, SERVER_IP_ADDRESS_4};
+
+         connection.proto.tcp = &user_tcp;
+         memcpy(&connection.proto.tcp->remote_ip, tcp_server_ip, 4);
+         connection.proto.tcp->remote_port = SERVER_PORT;
+         connection.proto.tcp->local_port = espconn_port(); // local port of ESP8266
+
+         espconn_regist_connectcb(&connection, successfull_connected_tcp_handler_callback);
+         espconn_regist_disconcb(&connection, successfull_disconnected_tcp_handler_callback);
+         espconn_regist_reconcb(&connection, tcp_connection_error_handler_callback);
+         espconn_regist_sentcb(&connection, tcp_request_successfully_sent_handler_callback);
+         espconn_regist_recvcb(&connection, tcp_response_received_handler_callback);
+         //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
+
+         send_request(&connection);
       } else if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
          pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
          vTaskDelay(1000 / portTICK_RATE_MS);
@@ -716,10 +740,9 @@ pins_config() {
    GPIO_ConfigTypeDef output_pins;
    //output_pins.GPIO_IntrType = GPIO_PIN_INTR_ANYEDGE;
    output_pins.GPIO_Mode = GPIO_Mode_Output;
-   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN | PROJECTOR_RELAY_PIN;
+   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN;
    pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   pin_output_reset(PROJECTOR_RELAY_PIN);
    //output_pins.GPIO_Pullup = GPIO_PullUp_DIS;
    gpio_config(&output_pins);
 }
@@ -728,9 +751,9 @@ void user_init(void) {
    uart_init_new();
    UART_SetBaudrate(UART0, 115200);
 
-#ifdef ALLOW_USE_PRINTF
+   #ifdef ALLOW_USE_PRINTF
    printf("\nSoftware is running from: %s\n", system_upgrade_userbin_check() ? "user2.bin" : "user1.bin");
-#endif
+   #endif
 
    pins_config();
    wifi_set_event_handler_cb(wifi_event_handler_callback);
@@ -741,8 +764,11 @@ void user_init(void) {
    xTaskCreate(autoconnect_task, "autoconnect_task", 256, NULL, 1, NULL);
    xTaskCreate(scan_access_point_task, "scan_access_point_task", 256, NULL, 1, NULL);
 
-   vSemaphoreCreateBinary(long_polling_request_semaphore_g);
+   vSemaphoreCreateBinary(request_semaphore_g);
+   xSemaphoreGive(request_semaphore_g);
+   xTaskCreate(send_status_requests_task, "send_status_requests_task", 384, NULL, 1, NULL);
+   /*vSemaphoreCreateBinary(long_polling_request_semaphore_g);
    xSemaphoreGive(long_polling_request_semaphore_g);
-   xTaskCreate(send_long_polling_requests_task, "send_long_polling_requests_task", 384, NULL, 1, NULL);
+   xTaskCreate(send_long_polling_requests_task, "send_long_polling_requests_task", 384, NULL, 1, NULL);*/
    //xTaskCreate(print_some_stuff_task, "print_some_stuff_task", 256, NULL, 1, NULL);
 }
