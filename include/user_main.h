@@ -15,10 +15,11 @@
 #define UPDATE_FIRMWARE_FLAG                       4
 #define REQUEST_ERROR_OCCURRED_FLAG                8
 
-#define REQUEST_IDLE_TIME_ON_ERROR (10000 / portTICK_RATE_MS) // 10 sec
-#define REQUEST_MAX_DURATION_TIME (10000 / portTICK_RATE_MS) // 10 sec
+#define REQUEST_IDLE_TIME_ON_ERROR              (10000 / portTICK_RATE_MS) // 10 sec
+#define REQUEST_MAX_DURATION_TIME               (10000 / portTICK_RATE_MS) // 10 sec
+#define STATUS_REQUESTS_SEND_INTERVAL           (30000 / portTICK_RATE_MS) // 30 sec
 #define LONG_POLLING_REQUEST_IDLE_TIME_ON_ERROR (10000 / portTICK_RATE_MS) // 10 sec
-#define LONG_POLLING_REQUEST_MAX_DURATION_TIME (5.5 * 60 * 1000 / portTICK_RATE_MS) // 5.5 mins
+#define LONG_POLLING_REQUEST_MAX_DURATION_TIME  (5.5 * 60 * 1000 / portTICK_RATE_MS) // 5.5 mins
 
 char RESPONSE_SERVER_SENT_OK[] ICACHE_RODATA_ATTR = "\"statusCode\":\"OK\"";
 char STATUS_INFO_POST_REQUEST[] ICACHE_RODATA_ATTR =
@@ -59,6 +60,8 @@ struct connection_user_data {
 void scan_access_point_task(void *pvParameters);
 void send_long_polling_requests_task(void *pvParameters);
 void autoconnect_task(void *pvParameters);
+void activate_status_requests_task_task(void *pvParameters);
+void send_status_requests_task(void *pvParameters);
 void successfull_connected_tcp_handler_callback(void *arg);
 void successfull_disconnected_tcp_handler_callback();
 void tcp_connection_error_handler_callback(void *arg, sint8 err);
@@ -69,4 +72,6 @@ void long_polling_request_on_succeed_callback(struct espconn *connection);
 void long_polling_request_on_error_callback(struct espconn *connection);
 void long_polling_request_finish_action(struct espconn *connection);
 void upgrade_firmware();
+void establish_connection(struct espconn *connection);
+void request_finish_action(struct espconn *connection, xSemaphoreHandle *semaphoreToGive);
 #endif

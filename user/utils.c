@@ -109,11 +109,12 @@ void *set_string_parameters(char string[], char *parameters[]) {
 }
 
 LOCAL void calculate_rom_string_length_or_fill_malloc(unsigned short *string_length, char *result, const char *rom_string) {
-   unsigned char calculate_string_length = *string_length ? 0 : 1;
+   unsigned char calculate_string_length = *string_length ? false : true;
    unsigned short calculated_string_length = 0;
    unsigned int *rom_string_aligned = (unsigned int*) (((unsigned int) (rom_string)) & ~3); // Could be saved in not 4 bytes aligned address
    unsigned int rom_string_aligned_value = *rom_string_aligned;
    unsigned char shifted_bytes = (unsigned char) ((unsigned int) (rom_string) - (unsigned int) (rom_string_aligned)); // 0 - 3
+   bool prematurely_stopped = false;
 
    unsigned char shifted_bytes_tmp = shifted_bytes;
    while (shifted_bytes_tmp < 4) {
@@ -123,6 +124,7 @@ LOCAL void calculate_rom_string_length_or_fill_malloc(unsigned short *string_len
       unsigned int current_character_shifted = rom_string_aligned_value & comparable;
 
       if (current_character_shifted == 0) {
+         prematurely_stopped = true;
          break;
       }
       shifted_bytes_tmp++;
@@ -140,7 +142,7 @@ LOCAL void calculate_rom_string_length_or_fill_malloc(unsigned short *string_len
    }
 
    unsigned int *rom_string_aligned_next = rom_string_aligned + 1;
-   while (1) {
+   while (prematurely_stopped == false && 1) {
       unsigned int shifted_tmp = 0xFF;
       unsigned int rom_string_aligned_tmp_value = *rom_string_aligned_next;
       unsigned char stop = 0;

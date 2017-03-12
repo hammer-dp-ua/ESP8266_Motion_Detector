@@ -30,8 +30,8 @@ make clean
 make COMPILE= BOOT=new APP=1 SPI_SPEED=40 SPI_MODE=QIO SPI_SIZE_MAP=2
 cp %BIN_PATH_WIN%\upgrade\user1.1024.new.2.bin %FOTA_PATH%\user1.bin
 
-make clean
-make COMPILE= BOOT=new APP=2 SPI_SPEED=40 SPI_MODE=QIO SPI_SIZE_MAP=2
-cp %BIN_PATH_WIN%\upgrade\user2.1024.new.2.bin %FOTA_PATH%\user2.bin
+rem make clean
+rem make COMPILE= BOOT=new APP=2 SPI_SPEED=40 SPI_MODE=QIO SPI_SIZE_MAP=2
+rem cp %BIN_PATH_WIN%\upgrade\user2.1024.new.2.bin %FOTA_PATH%\user2.bin
 
 :end
