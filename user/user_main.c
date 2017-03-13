@@ -31,6 +31,8 @@ unsigned int general_flags;
 xSemaphoreHandle status_request_semaphore_g;
 xSemaphoreHandle long_polling_request_semaphore_g;
 
+os_timer_t pins_state_timer;
+
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
  * Description  : SDK just reversed 4 sectors, used for rf init data and paramters.
@@ -781,15 +783,44 @@ void set_default_wi_fi_settings() {
    free(own_ip_address);
 }
 
+void read_pin_state_callback(void *arg) {
+   unsigned int status = (unsigned int) arg;
+   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
+
+   if (status == MOTION_DETECTOR_INPUT_PIN && !read_input_pin_state(MOTION_DETECTOR_INPUT_PIN)) {
+      printf("MOTION_DETECTOR_INPUT_PIN is pressed\n");
+   }
+}
+
+void pins_interrupt_handler() {
+   unsigned int status = GPIO_REG_READ(GPIO_STATUS_ADDRESS);
+   //clear interrupt status
+   GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, status);
+
+   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_DISABLE);
+
+   os_timer_disarm(&pins_state_timer);
+   os_timer_setfn(&pins_state_timer, (os_timer_func_t *) read_pin_state_callback, (void *) status);
+   os_timer_arm(&pins_state_timer, 500, 0);
+}
+
 pins_config() {
    GPIO_ConfigTypeDef output_pins;
-   //output_pins.GPIO_IntrType = GPIO_PIN_INTR_ANYEDGE;
    output_pins.GPIO_Mode = GPIO_Mode_Output;
    output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN;
    pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   //output_pins.GPIO_Pullup = GPIO_PullUp_DIS;
    gpio_config(&output_pins);
+
+   GPIO_ConfigTypeDef input_pins;
+   input_pins.GPIO_Mode = GPIO_Mode_Input;
+   input_pins.GPIO_Pin = MOTION_DETECTOR_INPUT_PIN;
+   input_pins.GPIO_Pullup = GPIO_PullUp_EN;
+   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
+   gpio_config(&input_pins);
+
+   gpio_intr_handler_register(pins_interrupt_handler, NULL);
+   enable_pins_interrupt();
 }
 
 void user_init(void) {

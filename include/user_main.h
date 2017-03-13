@@ -1,8 +1,13 @@
 #ifndef MAIN_HEADER
 #define MAIN_HEADER
 
-#define AP_CONNECTION_STATUS_LED_PIN GPIO_Pin_5
-#define SERVER_AVAILABILITY_STATUS_LED_PIN GPIO_Pin_4
+#define enable_pins_interrupt()  _xt_isr_unmask(1<<ETS_GPIO_INUM)
+#define disable_pins_interrupt() _xt_isr_mask(1<<ETS_GPIO_INUM)
+
+#define AP_CONNECTION_STATUS_LED_PIN         GPIO_Pin_5
+#define SERVER_AVAILABILITY_STATUS_LED_PIN   GPIO_Pin_4
+#define MOTION_DETECTOR_INPUT_PIN_ID         14
+#define MOTION_DETECTOR_INPUT_PIN            BIT(MOTION_DETECTOR_INPUT_PIN_ID)
 
 #ifndef true // needed only for Eclipse
    typedef unsigned char bool;
@@ -74,4 +79,5 @@ void long_polling_request_finish_action(struct espconn *connection);
 void upgrade_firmware();
 void establish_connection(struct espconn *connection);
 void request_finish_action(struct espconn *connection, xSemaphoreHandle *semaphoreToGive);
+void pins_interrupt_handler();
 #endif
