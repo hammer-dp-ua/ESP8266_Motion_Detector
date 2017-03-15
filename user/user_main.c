@@ -251,7 +251,7 @@ void long_polling_request_on_error_callback(struct espconn *connection) {
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle *semaphoresToGive[] = {&long_polling_request_semaphore_g, NULL};
+   xSemaphoreHandle semaphoresToGive[] = {long_polling_request_semaphore_g, NULL};
    request_finish_action(connection, semaphoresToGive);
 }
 
@@ -266,7 +266,7 @@ void status_request_on_error_callback(struct espconn *connection) {
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle *semaphoresToGive[] = {&status_request_semaphore_g, &requests_mutex_g, NULL};
+   xSemaphoreHandle semaphoresToGive[] = {status_request_semaphore_g, requests_mutex_g, NULL};
    request_finish_action(connection, semaphoresToGive);
 }
 
@@ -281,7 +281,7 @@ void alarm_request_on_error_callback(struct espconn *connection) {
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle *semaphoresToGive[] = {&requests_mutex_g, NULL};
+   xSemaphoreHandle semaphoresToGive[] = {requests_mutex_g, NULL};
    request_finish_action(connection, semaphoresToGive);
 }
 
@@ -309,7 +309,7 @@ void long_polling_request_on_succeed_callback(struct espconn *connection) {
    check_for_update_firmware(user_data->response);
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   xSemaphoreHandle *semaphoresToGive[] = {&long_polling_request_semaphore_g, NULL};
+   xSemaphoreHandle semaphoresToGive[] = {long_polling_request_semaphore_g, NULL};
    request_finish_action(connection, semaphoresToGive);
 }
 
@@ -328,7 +328,7 @@ void status_request_on_succeed_callback(struct espconn *connection) {
    check_for_update_firmware(user_data->response);
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   xSemaphoreHandle *semaphoresToGive[] = {&requests_mutex_g, NULL};
+   xSemaphoreHandle semaphoresToGive[] = {requests_mutex_g, NULL};
    request_finish_action(connection, semaphoresToGive);
 
    xTaskCreate(activate_status_requests_task_task, "activate_status_requests_task_task", 256, NULL, 1, NULL);
@@ -350,15 +350,20 @@ void alarm_request_on_succeed_callback(struct espconn *connection) {
    check_for_update_firmware(user_data->response);
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   xSemaphoreHandle *semaphoresToGive[] = {&requests_mutex_g, NULL};
-   request_finish_action(connection, semaphoresToGive);
 
    if (parent_task) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("parent task is to be deleted...\n");
+      #endif
+
       vTaskDelete(parent_task);
    }
+
+   xSemaphoreHandle semaphoresToGive[] = {requests_mutex_g, NULL};
+   request_finish_action(connection, semaphoresToGive);
 }
 
-void request_finish_action(struct espconn *connection, xSemaphoreHandle *semaphoresToGive[]) {
+void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphoresToGive[]) {
    struct connection_user_data *user_data = connection->reserve;
    char *request = user_data->request;
 
@@ -378,13 +383,20 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle *semapho
       printf("timeout_request_supervisor_task exists\n");
       #endif
    }
-   espconn_delete(connection);
+   free(user_data);
+   sint8 error_code = espconn_delete(connection);
+   if (error_code != 0) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("ERROR! Connection is still in progress\n");
+      #endif
+   }
+   free(connection);
 
    if (semaphoresToGive) {
       unsigned char i;
       for (i = 0; semaphoresToGive[i] != NULL; i++) {
-         xSemaphoreHandle *semaphoreToGive = semaphoresToGive[i];
-         xSemaphoreGive(*semaphoreToGive);
+         xSemaphoreHandle semaphoreToGive = semaphoresToGive[i];
+         xSemaphoreGive(semaphoreToGive);
       }
    }
 }
@@ -412,11 +424,11 @@ void timeout_request_supervisor_task(void *pvParameters) {
 
       // To not delete this task in other functions
       user_data->timeout_request_supervisor_task = NULL;
+   }
 
-      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
-      if (execute_on_error != NULL) {
-         execute_on_error(connection);
-      }
+   void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+   if (execute_on_error != NULL) {
+      execute_on_error(connection);
    }
 
    vTaskDelete(NULL);
@@ -568,36 +580,36 @@ void send_long_polling_requests_task(void *pvParameters) {
             continue;
          }
 
-         struct espconn connection;
-         struct connection_user_data user_data;
+         struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
+         struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
 
-         user_data.response_received = false;
-         user_data.timeout_request_supervisor_task = NULL;
+         user_data->response_received = false;
+         user_data->timeout_request_supervisor_task = NULL;
          //user_data.request = request;
-         user_data.response = NULL;
-         user_data.execute_on_succeed = long_polling_request_on_succeed_callback;
-         user_data.execute_on_error = long_polling_request_on_error_callback;
-         user_data.request_max_duration_time = LONG_POLLING_REQUEST_MAX_DURATION_TIME;
-         connection.reserve = &user_data;
-         connection.type = ESPCONN_TCP;
-         connection.state = ESPCONN_NONE;
+         user_data->response = NULL;
+         user_data->execute_on_succeed = long_polling_request_on_succeed_callback;
+         user_data->execute_on_error = long_polling_request_on_error_callback;
+         user_data->request_max_duration_time = LONG_POLLING_REQUEST_MAX_DURATION_TIME;
+         connection->reserve = user_data;
+         connection->type = ESPCONN_TCP;
+         connection->state = ESPCONN_NONE;
 
          // remote IP of TCP server
          unsigned char tcp_server_ip[] = {SERVER_IP_ADDRESS_1, SERVER_IP_ADDRESS_2, SERVER_IP_ADDRESS_3, SERVER_IP_ADDRESS_4};
 
-         connection.proto.tcp = &user_tcp;
-         memcpy(&connection.proto.tcp->remote_ip, tcp_server_ip, 4);
-         connection.proto.tcp->remote_port = SERVER_PORT;
-         connection.proto.tcp->local_port = espconn_port(); // local port of ESP8266
+         connection->proto.tcp = &user_tcp;
+         memcpy(&connection->proto.tcp->remote_ip, tcp_server_ip, 4);
+         connection->proto.tcp->remote_port = SERVER_PORT;
+         connection->proto.tcp->local_port = espconn_port(); // local port of ESP8266
 
-         espconn_regist_connectcb(&connection, successfull_connected_tcp_handler_callback);
-         espconn_regist_disconcb(&connection, successfull_disconnected_tcp_handler_callback);
-         espconn_regist_reconcb(&connection, tcp_connection_error_handler_callback);
-         espconn_regist_sentcb(&connection, tcp_request_successfully_sent_handler_callback);
-         espconn_regist_recvcb(&connection, tcp_response_received_handler_callback);
+         espconn_regist_connectcb(connection, successfull_connected_tcp_handler_callback);
+         espconn_regist_disconcb(connection, successfull_disconnected_tcp_handler_callback);
+         espconn_regist_reconcb(connection, tcp_connection_error_handler_callback);
+         espconn_regist_sentcb(connection, tcp_request_successfully_sent_handler_callback);
+         espconn_regist_recvcb(connection, tcp_response_received_handler_callback);
          //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
 
-         establish_connection(&connection);
+         establish_connection(connection);
       } else if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
          pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
          vTaskDelay(1000 / portTICK_RATE_MS);
@@ -612,6 +624,10 @@ void activate_status_requests_task_task(void *pvParameters) {
 }
 
 void send_status_requests_task(void *pvParameters) {
+   #ifdef ALLOW_USE_PRINTF
+   printf("send_status_requests_task has been created\n");
+   #endif
+
    for (;;) {
       xSemaphoreTake(status_request_semaphore_g, portMAX_DELAY);
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
@@ -676,41 +692,43 @@ void send_status_requests_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      struct espconn connection;
-      struct connection_user_data user_data;
+      struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
+      struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
 
-      user_data.response_received = false;
-      user_data.timeout_request_supervisor_task = NULL;
-      user_data.request = request;
-      user_data.response = NULL;
-      user_data.execute_on_succeed = status_request_on_succeed_callback;
-      user_data.execute_on_error = status_request_on_error_callback;
-      user_data.request_max_duration_time = REQUEST_MAX_DURATION_TIME;
-      connection.reserve = &user_data;
-      connection.type = ESPCONN_TCP;
-      connection.state = ESPCONN_NONE;
+      user_data->response_received = false;
+      user_data->timeout_request_supervisor_task = NULL;
+      user_data->request = request;
+      user_data->response = NULL;
+      user_data->execute_on_succeed = status_request_on_succeed_callback;
+      user_data->execute_on_error = status_request_on_error_callback;
+      user_data->request_max_duration_time = REQUEST_MAX_DURATION_TIME;
+      connection->reserve = user_data;
+      connection->type = ESPCONN_TCP;
+      connection->state = ESPCONN_NONE;
 
       // remote IP of TCP server
       unsigned char tcp_server_ip[] = {SERVER_IP_ADDRESS_1, SERVER_IP_ADDRESS_2, SERVER_IP_ADDRESS_3, SERVER_IP_ADDRESS_4};
 
-      connection.proto.tcp = &user_tcp;
-      memcpy(&connection.proto.tcp->remote_ip, tcp_server_ip, 4);
-      connection.proto.tcp->remote_port = SERVER_PORT;
-      connection.proto.tcp->local_port = espconn_port(); // local port of ESP8266
+      connection->proto.tcp = &user_tcp;
+      memcpy(&connection->proto.tcp->remote_ip, tcp_server_ip, 4);
+      connection->proto.tcp->remote_port = SERVER_PORT;
+      connection->proto.tcp->local_port = espconn_port(); // local port of ESP8266
 
-      espconn_regist_connectcb(&connection, successfull_connected_tcp_handler_callback);
-      espconn_regist_disconcb(&connection, successfull_disconnected_tcp_handler_callback);
-      espconn_regist_reconcb(&connection, tcp_connection_error_handler_callback);
-      espconn_regist_sentcb(&connection, tcp_request_successfully_sent_handler_callback);
-      espconn_regist_recvcb(&connection, tcp_response_received_handler_callback);
+      espconn_regist_connectcb(connection, successfull_connected_tcp_handler_callback);
+      espconn_regist_disconcb(connection, successfull_disconnected_tcp_handler_callback);
+      espconn_regist_reconcb(connection, tcp_connection_error_handler_callback);
+      espconn_regist_sentcb(connection, tcp_request_successfully_sent_handler_callback);
+      espconn_regist_recvcb(connection, tcp_response_received_handler_callback);
       //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
 
-      establish_connection(&connection);
+      establish_connection(connection);
    }
 }
 
 void send_alarm_request_task(void *pvParameters) {
-   xTaskHandle current_task = pvParameters;
+   #ifdef ALLOW_USE_PRINTF
+   printf("send_alarm_request_task has been created\n");
+   #endif
 
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
@@ -746,37 +764,37 @@ void send_alarm_request_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      struct espconn connection;
-      struct connection_user_data user_data;
+      struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
+      struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
 
-      user_data.response_received = false;
-      user_data.timeout_request_supervisor_task = NULL;
-      user_data.request = request;
-      user_data.response = NULL;
-      user_data.execute_on_succeed = alarm_request_on_succeed_callback;
-      user_data.execute_on_error = alarm_request_on_error_callback;
-      user_data.parent_task = current_task;
-      user_data.request_max_duration_time = REQUEST_MAX_DURATION_TIME;
-      connection.reserve = &user_data;
-      connection.type = ESPCONN_TCP;
-      connection.state = ESPCONN_NONE;
+      user_data->response_received = false;
+      user_data->timeout_request_supervisor_task = NULL;
+      user_data->request = request;
+      user_data->response = NULL;
+      user_data->execute_on_succeed = alarm_request_on_succeed_callback;
+      user_data->execute_on_error = alarm_request_on_error_callback;
+      user_data->parent_task = xTaskGetCurrentTaskHandle();
+      user_data->request_max_duration_time = REQUEST_MAX_DURATION_TIME;
+      connection->reserve = user_data;
+      connection->type = ESPCONN_TCP;
+      connection->state = ESPCONN_NONE;
 
       // remote IP of TCP server
       unsigned char tcp_server_ip[] = {SERVER_IP_ADDRESS_1, SERVER_IP_ADDRESS_2, SERVER_IP_ADDRESS_3, SERVER_IP_ADDRESS_4};
 
-      connection.proto.tcp = &user_tcp;
-      memcpy(&connection.proto.tcp->remote_ip, tcp_server_ip, 4);
-      connection.proto.tcp->remote_port = SERVER_PORT;
-      connection.proto.tcp->local_port = espconn_port(); // local port of ESP8266
+      connection->proto.tcp = &user_tcp;
+      memcpy(&connection->proto.tcp->remote_ip, tcp_server_ip, 4);
+      connection->proto.tcp->remote_port = SERVER_PORT;
+      connection->proto.tcp->local_port = espconn_port(); // local port of ESP8266
 
-      espconn_regist_connectcb(&connection, successfull_connected_tcp_handler_callback);
-      espconn_regist_disconcb(&connection, successfull_disconnected_tcp_handler_callback);
-      espconn_regist_reconcb(&connection, tcp_connection_error_handler_callback);
-      espconn_regist_sentcb(&connection, tcp_request_successfully_sent_handler_callback);
-      espconn_regist_recvcb(&connection, tcp_response_received_handler_callback);
+      espconn_regist_connectcb(connection, successfull_connected_tcp_handler_callback);
+      espconn_regist_disconcb(connection, successfull_disconnected_tcp_handler_callback);
+      espconn_regist_reconcb(connection, tcp_connection_error_handler_callback);
+      espconn_regist_sentcb(connection, tcp_request_successfully_sent_handler_callback);
+      espconn_regist_recvcb(connection, tcp_response_received_handler_callback);
       //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
 
-      establish_connection(&connection);
+      establish_connection(connection);
    }
 }
 
@@ -856,8 +874,7 @@ void read_pin_state_timer_callback(void *arg) {
       os_timer_setfn(&ignore_alarms_timer_g, (os_timer_func_t *) stop_ignoring_alarms_timer_callback, NULL);
       os_timer_arm(&ignore_alarms_timer_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000, 0);
 
-      xTaskHandle created_task;
-      xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 384, created_task, 2, created_task);
+      xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 384, NULL, 2, NULL);
    }
 }
 
@@ -912,6 +929,7 @@ void user_init(void) {
    vSemaphoreCreateBinary(status_request_semaphore_g);
    xSemaphoreGive(status_request_semaphore_g);
    requests_mutex_g = xSemaphoreCreateMutex();
+
    xTaskCreate(send_status_requests_task, "send_status_requests_task", 384, NULL, 1, NULL);
    /*vSemaphoreCreateBinary(long_polling_request_semaphore_g);
    xSemaphoreGive(long_polling_request_semaphore_g);

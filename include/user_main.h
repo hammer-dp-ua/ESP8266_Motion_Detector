@@ -44,7 +44,7 @@ char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
       "\"errors\":\"<3>\","
       "\"buildTimestamp\":\"<4>\"}";
 char ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
-      "GET /server/esp8266/alarm HTTP/1.1\r\n"
+      "GET /server/esp8266/testAlarm HTTP/1.1\r\n"
       "Host: <1>\r\n"
       "User-Agent: ESP8266\r\n"
       "Accept: application/json\r\n\r\n";
@@ -83,6 +83,6 @@ void long_polling_request_on_error_callback(struct espconn *connection);
 void long_polling_request_finish_action(struct espconn *connection);
 void upgrade_firmware();
 void establish_connection(struct espconn *connection);
-void request_finish_action(struct espconn *connection, xSemaphoreHandle *semaphoreToGive[]);
+void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphoreToGive[]);
 void pins_interrupt_handler();
 #endif
