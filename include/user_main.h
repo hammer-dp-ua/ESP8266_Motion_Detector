@@ -36,6 +36,7 @@ char STATUS_INFO_POST_REQUEST[] ICACHE_RODATA_ATTR =
       "Host: <2>\r\n"
       "User-Agent: ESP8266\r\n"
       "Content-Type: application/json\r\n"
+      "Connection: close\r\n"
       "Accept: application/json\r\n\r\n"
       "<3>\r\n";
 char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
@@ -47,6 +48,7 @@ char ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "GET /server/esp8266/testAlarm HTTP/1.1\r\n"
       "Host: <1>\r\n"
       "User-Agent: ESP8266\r\n"
+      "Connection: close\r\n"
       "Accept: application/json\r\n\r\n";
 char UPDATE_FIRMWARE[] ICACHE_RODATA_ATTR = "\"updateFirmware\":true";
 char FIRMWARE_UPDATE_GET_REQUEST[] ICACHE_RODATA_ATTR =
@@ -83,6 +85,6 @@ void long_polling_request_on_error_callback(struct espconn *connection);
 void long_polling_request_finish_action(struct espconn *connection);
 void upgrade_firmware();
 void establish_connection(struct espconn *connection);
-void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphoreToGive[]);
+void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphores_to_give[]);
 void pins_interrupt_handler();
 #endif
