@@ -8,6 +8,8 @@
 #define SERVER_AVAILABILITY_STATUS_LED_PIN   GPIO_Pin_4
 #define MOTION_DETECTOR_INPUT_PIN_ID         14
 #define MOTION_DETECTOR_INPUT_PIN            BIT(MOTION_DETECTOR_INPUT_PIN_ID)
+#define BUZZER_PIN                           GPIO_Pin_12
+#define MOTION_SENSOR_ENABLE_PIN             GPIO_Pin_13
 
 #ifndef true // needed only for Eclipse
    typedef unsigned char bool;
@@ -74,6 +76,7 @@ void autoconnect_task(void *pvParameters);
 void activate_status_requests_task_task(void *pvParameters);
 void send_status_requests_task(void *pvParameters);
 void send_alarm_request_task(void *pvParameters);
+void beep_task();
 void successfull_connected_tcp_handler_callback(void *arg);
 void successfull_disconnected_tcp_handler_callback();
 void tcp_connection_error_handler_callback(void *arg, sint8 err);

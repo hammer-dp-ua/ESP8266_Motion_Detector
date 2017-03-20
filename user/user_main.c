@@ -31,6 +31,7 @@ unsigned int general_flags;
 xSemaphoreHandle status_request_semaphore_g;
 xSemaphoreHandle long_polling_request_semaphore_g;
 xSemaphoreHandle requests_mutex_g;
+xSemaphoreHandle buzzer_semaphore_g;
 
 os_timer_t pins_state_timer_g;
 os_timer_t ignore_alarms_timer_g;
@@ -144,6 +145,34 @@ void ICACHE_FLASH_ATTR print_some_stuff_task(void *pvParameters) {
    #endif
    upgrade_firmware();
 
+   vTaskDelete(NULL);
+}
+
+void beep_task() {
+   #ifdef ALLOW_USE_PRINTF
+   printf("beep_task has been created. Time: %u\n", milliseconds_g);
+   #endif
+
+   vSemaphoreCreateBinary(buzzer_semaphore_g);
+
+   pin_output_set(BUZZER_PIN);
+   vTaskDelay(200 / portTICK_RATE_MS);
+   pin_output_reset(BUZZER_PIN);
+   vTaskDelay(200 / portTICK_RATE_MS);
+   pin_output_set(BUZZER_PIN);
+   vTaskDelay(200 / portTICK_RATE_MS);
+   pin_output_reset(BUZZER_PIN);
+
+   vTaskDelay(1000 / portTICK_RATE_MS);
+
+   if (xSemaphoreTake(buzzer_semaphore_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000 / portTICK_RATE_MS) == pdPASS) {
+      pin_output_set(BUZZER_PIN);
+      vTaskDelay(1000 / portTICK_RATE_MS);
+      pin_output_reset(BUZZER_PIN);
+   }
+
+   vSemaphoreDelete(buzzer_semaphore_g);
+   buzzer_semaphore_g = NULL;
    vTaskDelete(NULL);
 }
 
@@ -364,6 +393,10 @@ void alarm_request_on_succeed_callback(struct espconn *connection) {
       vTaskDelete(parent_task);
    }
 
+   if (buzzer_semaphore_g != NULL) {
+      xSemaphoreGive(buzzer_semaphore_g);
+   }
+
    xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
    request_finish_action(connection, semaphores_to_give);
 }
@@ -429,11 +462,11 @@ void timeout_request_supervisor_task(void *pvParameters) {
 
       // To not delete this task in other functions
       user_data->timeout_request_supervisor_task = NULL;
-   }
 
-   void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
-   if (execute_on_error != NULL) {
-      execute_on_error(connection);
+      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+      if (execute_on_error != NULL) {
+         execute_on_error(connection);
+      }
    }
 
    vTaskDelete(NULL);
@@ -444,14 +477,14 @@ void ota_finished_callback(void *arg) {
 
    if (update->upgrade_flag == true) {
       #ifdef ALLOW_USE_PRINTF
-      printf("[OTA] success; rebooting!\n");
+      printf("[OTA] success; rebooting! Time: %u\n", milliseconds_g);
       #endif
 
       system_upgrade_flag_set(UPGRADE_FLAG_FINISH);
       system_upgrade_reboot();
    } else {
       #ifdef ALLOW_USE_PRINTF
-      printf("[OTA] failed!\n");
+      printf("[OTA] failed! Time: %u\n", milliseconds_g);
       #endif
 
       system_restart();
@@ -477,6 +510,9 @@ void blink_leds_while_updating_task(void *pvParameters) {
 }
 
 void upgrade_firmware() {
+      #ifdef ALLOW_USE_PRINTF
+      printf("\nUpdating firmware... Time: %u\n", milliseconds_g);
+      #endif
    xTaskCreate(blink_leds_while_updating_task, "blink_leds_while_updating_task", 256, NULL, 1, NULL);
 
    struct upgrade_server_info *upgrade_server = (struct upgrade_server_info *) zalloc(sizeof(struct upgrade_server_info));
@@ -730,6 +766,8 @@ void send_alarm_request_task(void *pvParameters) {
    printf("send_alarm_request_task has been created. Time: %u\n", milliseconds_g);
    #endif
 
+   xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
+
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
 
@@ -893,9 +931,11 @@ void pins_interrupt_handler() {
 pins_config() {
    GPIO_ConfigTypeDef output_pins;
    output_pins.GPIO_Mode = GPIO_Mode_Output;
-   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN;
+   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN | BUZZER_PIN | MOTION_SENSOR_ENABLE_PIN;
    pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
+   pin_output_reset(BUZZER_PIN);
+   pin_output_set(MOTION_SENSOR_ENABLE_PIN);
    gpio_config(&output_pins);
 
    GPIO_ConfigTypeDef input_pins;
