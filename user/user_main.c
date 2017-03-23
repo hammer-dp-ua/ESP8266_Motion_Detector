@@ -156,18 +156,14 @@ void beep_task() {
    vSemaphoreCreateBinary(buzzer_semaphore_g);
 
    pin_output_set(BUZZER_PIN);
-   vTaskDelay(200 / portTICK_RATE_MS);
-   pin_output_reset(BUZZER_PIN);
-   vTaskDelay(200 / portTICK_RATE_MS);
-   pin_output_set(BUZZER_PIN);
-   vTaskDelay(200 / portTICK_RATE_MS);
+   vTaskDelay(80 / portTICK_RATE_MS);
    pin_output_reset(BUZZER_PIN);
 
-   vTaskDelay(1000 / portTICK_RATE_MS);
+   vTaskDelay(500 / portTICK_RATE_MS);
 
    if (xSemaphoreTake(buzzer_semaphore_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000 / portTICK_RATE_MS) == pdPASS) {
       pin_output_set(BUZZER_PIN);
-      vTaskDelay(1000 / portTICK_RATE_MS);
+      vTaskDelay(100 / portTICK_RATE_MS);
       pin_output_reset(BUZZER_PIN);
    }
 
@@ -510,9 +506,12 @@ void blink_leds_while_updating_task(void *pvParameters) {
 }
 
 void upgrade_firmware() {
-      #ifdef ALLOW_USE_PRINTF
-      printf("\nUpdating firmware... Time: %u\n", milliseconds_g);
-      #endif
+   #ifdef ALLOW_USE_PRINTF
+   printf("\nUpdating firmware... Time: %u\n", milliseconds_g);
+   #endif
+
+   pin_output_set(MOTION_SENSOR_ENABLE_PIN);
+
    xTaskCreate(blink_leds_while_updating_task, "blink_leds_while_updating_task", 256, NULL, 1, NULL);
 
    struct upgrade_server_info *upgrade_server = (struct upgrade_server_info *) zalloc(sizeof(struct upgrade_server_info));
@@ -766,7 +765,11 @@ void send_alarm_request_task(void *pvParameters) {
    printf("send_alarm_request_task has been created. Time: %u\n", milliseconds_g);
    #endif
 
-   xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
+   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
+      vTaskDelete(NULL);
+   }
+
+   //xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
 
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
@@ -840,6 +843,7 @@ void wifi_event_handler_callback(System_Event_t *event) {
    switch (event->event_id) {
       case EVENT_STAMODE_CONNECTED:
          pin_output_set(AP_CONNECTION_STATUS_LED_PIN);
+         pin_output_set(MOTION_SENSOR_ENABLE_PIN);
          break;
       case EVENT_STAMODE_DISCONNECTED:
          pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
@@ -935,7 +939,7 @@ pins_config() {
    pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    pin_output_reset(BUZZER_PIN);
-   pin_output_set(MOTION_SENSOR_ENABLE_PIN);
+   pin_output_reset(MOTION_SENSOR_ENABLE_PIN);
    gpio_config(&output_pins);
 
    GPIO_ConfigTypeDef input_pins;
