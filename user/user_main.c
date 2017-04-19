@@ -137,7 +137,7 @@ void autoconnect_task(void *pvParameters) {
    }
 }
 
-void ICACHE_FLASH_ATTR print_some_stuff_task(void *pvParameters) {
+void ICACHE_FLASH_ATTR testing_task(void *pvParameters) {
    vTaskDelay(10000 / portTICK_RATE_MS);
 
    #ifdef ALLOW_USE_PRINTF
@@ -153,13 +153,13 @@ void beep_task() {
    printf("beep_task has been created. Time: %u\n", milliseconds_g);
    #endif
 
-   vSemaphoreCreateBinary(buzzer_semaphore_g);
+   //vSemaphoreCreateBinary(buzzer_semaphore_g);
 
    pin_output_set(BUZZER_PIN);
    vTaskDelay(80 / portTICK_RATE_MS);
    pin_output_reset(BUZZER_PIN);
 
-   vTaskDelay(500 / portTICK_RATE_MS);
+   /*vTaskDelay(500 / portTICK_RATE_MS);
 
    if (xSemaphoreTake(buzzer_semaphore_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000 / portTICK_RATE_MS) == pdPASS) {
       pin_output_set(BUZZER_PIN);
@@ -169,7 +169,7 @@ void beep_task() {
 
    vSemaphoreDelete(buzzer_semaphore_g);
    buzzer_semaphore_g = NULL;
-   vTaskDelete(NULL);
+   vTaskDelete(NULL);*/
 }
 
 void successfull_connected_tcp_handler_callback(void *arg) {
@@ -769,7 +769,7 @@ void send_alarm_request_task(void *pvParameters) {
       vTaskDelete(NULL);
    }
 
-   //xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
+   xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
 
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
@@ -910,7 +910,10 @@ void read_pin_state_timer_callback(void *arg) {
    unsigned int status = (unsigned int) arg;
    gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
 
-   if (status == MOTION_DETECTOR_INPUT_PIN && !read_input_pin_state(MOTION_DETECTOR_INPUT_PIN) && !read_flag(general_flags, IGNORE_ALARMS_FLAG)) {
+   if (status == MOTION_DETECTOR_INPUT_PIN &&
+         !read_input_pin_state(MOTION_DETECTOR_INPUT_PIN) &&
+         !read_flag(general_flags, IGNORE_ALARMS_FLAG) &&
+         read_output_pin_state(MOTION_SENSOR_ENABLE_PIN)) {
       set_flag(&general_flags, IGNORE_ALARMS_FLAG);
       os_timer_disarm(&ignore_alarms_timer_g);
       os_timer_setfn(&ignore_alarms_timer_g, (os_timer_func_t *) stop_ignoring_alarms_timer_callback, NULL);
@@ -953,15 +956,37 @@ pins_config() {
    enable_pins_interrupt();
 }
 
+void uart_config() {
+   UART_WaitTxFifoEmpty(UART0);
+
+   UART_ConfigTypeDef uart_config;
+   uart_config.baud_rate         = 115200;
+   uart_config.data_bits         = UART_WordLength_8b;
+   uart_config.parity            = USART_Parity_None;
+   uart_config.stop_bits         = USART_StopBits_1;
+   uart_config.flow_ctrl         = USART_HardwareFlowControl_None;
+   uart_config.UART_RxFlowThresh = 120;
+   uart_config.UART_InverseMask  = UART_None_Inverse;
+   UART_ParamConfig(UART0, &uart_config);
+
+   UART_IntrConfTypeDef uart_intr;
+   uart_intr.UART_IntrEnMask = UART_RXFIFO_TOUT_INT_ENA | UART_FRM_ERR_INT_ENA | UART_RXFIFO_FULL_INT_ENA;
+   uart_intr.UART_RX_FifoFullIntrThresh = 30;
+   uart_intr.UART_RX_TimeOutIntrThresh = 2;
+   uart_intr.UART_TX_FifoEmptyIntrThresh = 20;
+   UART_IntrConfig(UART0, &uart_intr);
+
+   UART_SetPrintPort(UART0);
+}
+
 void user_init(void) {
-   uart_init_new();
-   UART_SetBaudrate(UART0, 115200);
+   pins_config();
+   uart_config();
 
    #ifdef ALLOW_USE_PRINTF
    printf("\nSoftware is running from: %s\n", system_upgrade_userbin_check() ? "user2.bin" : "user1.bin");
    #endif
 
-   pins_config();
    wifi_set_event_handler_cb(wifi_event_handler_callback);
    set_default_wi_fi_settings();
    espconn_init();
@@ -981,5 +1006,5 @@ void user_init(void) {
    /*vSemaphoreCreateBinary(long_polling_request_semaphore_g);
    xSemaphoreGive(long_polling_request_semaphore_g);
    xTaskCreate(send_long_polling_requests_task, "send_long_polling_requests_task", 384, NULL, 1, NULL);*/
-   //xTaskCreate(print_some_stuff_task, "print_some_stuff_task", 256, NULL, 1, NULL);
+   //xTaskCreate(testing_task, "testing_task", 256, NULL, 1, NULL);
 }
