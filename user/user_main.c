@@ -20,7 +20,13 @@
 unsigned int milliseconds_g;
 int signal_strength_g;
 unsigned short errors_counter_g;
+
 LOCAL os_timer_t millisecons_time_serv_g;
+LOCAL os_timer_t motion_detector_ignore_timer_g;
+LOCAL os_timer_t pin_state_timers_g[16];
+LOCAL os_timer_t ignore_alarms_timer_g;
+LOCAL os_timer_t ignore_false_alarms_timer_g;
+LOCAL os_timer_t recheck_false_alarm_timer_g;
 
 struct _esp_tcp user_tcp;
 
@@ -29,12 +35,8 @@ char *responses[10];
 unsigned int general_flags;
 
 xSemaphoreHandle status_request_semaphore_g;
-xSemaphoreHandle long_polling_request_semaphore_g;
 xSemaphoreHandle requests_mutex_g;
 xSemaphoreHandle buzzer_semaphore_g;
-
-os_timer_t pins_state_timer_g;
-os_timer_t ignore_alarms_timer_g;
 
 /******************************************************************************
  * FunctionName : user_rf_cal_sector_set
@@ -90,6 +92,25 @@ void start_100millisecons_counter() {
 
 void stop_milliseconds_counter() {
    os_timer_disarm(&millisecons_time_serv_g);
+}
+
+void stop_ignoring_motion_detector() {
+   reset_flag(&general_flags, IGNORE_MOTION_DETECTOR_FLAG);
+}
+
+void turn_motion_detector_on() {
+   set_flag(&general_flags, IGNORE_MOTION_DETECTOR_FLAG);
+
+   os_timer_disarm(&motion_detector_ignore_timer_g);
+   os_timer_setfn(&motion_detector_ignore_timer_g, (os_timer_func_t *) stop_ignoring_motion_detector, NULL);
+   os_timer_arm(&motion_detector_ignore_timer_g, IGNORE_MOTION_DETECTOR_TIMEOUT_AFTER_TURN_ON_SEC * 1000, false);
+
+   pin_output_set(MOTION_DETECTOR_ENABLE_PIN);
+}
+
+void turn_motion_detector_off() {
+   set_flag(&general_flags, IGNORE_MOTION_DETECTOR_FLAG);
+   pin_output_reset(MOTION_DETECTOR_ENABLE_PIN);
 }
 
 // Callback function when AP scanning is completed
@@ -262,21 +283,6 @@ void tcp_request_successfully_written_into_buffer_handler_callback() {
    //printf("Request written into buffer callback\n");
 }
 
-void long_polling_request_on_error_callback(struct espconn *connection) {
-   #ifdef ALLOW_USE_PRINTF
-   printf("long_polling_request_on_error_callback\n");
-   #endif
-
-   struct connection_user_data *user_data = connection->reserve;
-   char *request = user_data->request;
-
-   errors_counter_g++;
-   pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   set_flag(&general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle semaphores_to_give[] = {long_polling_request_semaphore_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
-}
-
 void status_request_on_error_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
    printf("status_request_on_error_callback. Time: %u\n", milliseconds_g);
@@ -314,29 +320,6 @@ void check_for_update_firmware(char *response) {
       set_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
    }
    free(update_firmware_json_element);
-}
-
-void long_polling_request_on_succeed_callback(struct espconn *connection) {
-   #ifdef ALLOW_USE_PRINTF
-   printf("long_polling_request_on_succeed_callback\n");
-   #endif
-
-   struct connection_user_data *user_data = connection->reserve;
-
-   if (!user_data->response_received) {
-      long_polling_request_on_error_callback(connection);
-      return;
-   }
-
-   check_for_update_firmware(user_data->response);
-
-   pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   xSemaphoreHandle semaphores_to_give[] = {long_polling_request_semaphore_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
-
-   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
-      upgrade_firmware();
-   }
 }
 
 void status_request_on_succeed_callback(struct espconn *connection) {
@@ -510,7 +493,7 @@ void upgrade_firmware() {
    printf("\nUpdating firmware... Time: %u\n", milliseconds_g);
    #endif
 
-   pin_output_set(MOTION_SENSOR_ENABLE_PIN);
+   turn_motion_detector_off();
 
    xTaskCreate(blink_leds_while_updating_task, "blink_leds_while_updating_task", 256, NULL, 1, NULL);
 
@@ -601,54 +584,6 @@ void establish_connection(struct espconn *connection) {
 
       if (user_data && user_data->execute_on_error) {
          user_data->execute_on_error(connection);
-      }
-   }
-}
-
-void send_long_polling_requests_task(void *pvParameters) {
-   for (;;) {
-      if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN) &&
-            xSemaphoreTake(long_polling_request_semaphore_g, portMAX_DELAY) == pdTRUE &&
-            !read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
-         if (read_flag(general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG)) {
-            reset_flag(&general_flags, LONG_POLLING_REQUEST_ERROR_OCCURRED_FLAG);
-
-            vTaskDelay(LONG_POLLING_REQUEST_IDLE_TIME_ON_ERROR);
-         }
-
-         struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
-         struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
-
-         user_data->response_received = false;
-         user_data->timeout_request_supervisor_task = NULL;
-         //user_data.request = request;
-         user_data->response = NULL;
-         user_data->execute_on_succeed = long_polling_request_on_succeed_callback;
-         user_data->execute_on_error = long_polling_request_on_error_callback;
-         user_data->request_max_duration_time = LONG_POLLING_REQUEST_MAX_DURATION_TIME;
-         connection->reserve = user_data;
-         connection->type = ESPCONN_TCP;
-         connection->state = ESPCONN_NONE;
-
-         // remote IP of TCP server
-         unsigned char tcp_server_ip[] = {SERVER_IP_ADDRESS_1, SERVER_IP_ADDRESS_2, SERVER_IP_ADDRESS_3, SERVER_IP_ADDRESS_4};
-
-         connection->proto.tcp = &user_tcp;
-         memcpy(&connection->proto.tcp->remote_ip, tcp_server_ip, 4);
-         connection->proto.tcp->remote_port = SERVER_PORT;
-         connection->proto.tcp->local_port = espconn_port(); // local port of ESP8266
-
-         espconn_regist_connectcb(connection, successfull_connected_tcp_handler_callback);
-         espconn_regist_disconcb(connection, successfull_disconnected_tcp_handler_callback);
-         espconn_regist_reconcb(connection, tcp_connection_error_handler_callback);
-         espconn_regist_sentcb(connection, tcp_request_successfully_sent_handler_callback);
-         espconn_regist_recvcb(connection, tcp_response_received_handler_callback);
-         //espconn_regist_write_finish(&connection, tcp_request_successfully_written_into_buffer_handler_callback);
-
-         establish_connection(connection);
-      } else if (read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
-         pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
-         vTaskDelay(1000 / portTICK_RATE_MS);
       }
    }
 }
@@ -795,9 +730,11 @@ void send_alarm_request_task(void *pvParameters) {
 
       char *request_template = get_string_from_rom(ALARM_GET_REQUEST);
       char *server_ip_address = get_string_from_rom(SERVER_IP_ADDRESS);
-      char *request_template_parameters[] = {server_ip_address, NULL};
+      char *device_name = get_string_from_rom(DEVICE_NAME);
+      char *request_template_parameters[] = {device_name, server_ip_address, NULL};
       char *request = set_string_parameters(request_template, request_template_parameters);
 
+      free(device_name);
       free(request_template);
       free(server_ip_address);
 
@@ -843,7 +780,7 @@ void wifi_event_handler_callback(System_Event_t *event) {
    switch (event->event_id) {
       case EVENT_STAMODE_CONNECTED:
          pin_output_set(AP_CONNECTION_STATUS_LED_PIN);
-         pin_output_set(MOTION_SENSOR_ENABLE_PIN);
+         turn_motion_detector_on();
          break;
       case EVENT_STAMODE_DISCONNECTED:
          pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
@@ -902,25 +839,69 @@ void set_default_wi_fi_settings() {
    free(own_ip_address);
 }
 
+void ignore_alarms() {
+   set_flag(&general_flags, IGNORE_ALARMS_FLAG);
+   os_timer_disarm(&ignore_alarms_timer_g);
+   os_timer_setfn(&ignore_alarms_timer_g, (os_timer_func_t *) stop_ignoring_alarms_timer_callback, NULL);
+   os_timer_arm(&ignore_alarms_timer_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000, 0);
+}
+
+void ignore_false_alarms() {
+   set_flag(&general_flags, IGNORE_FALSE_ALARMS_FLAG);
+   os_timer_disarm(&ignore_false_alarms_timer_g);
+   os_timer_setfn(&ignore_false_alarms_timer_g, (os_timer_func_t *) stop_ignoring_false_alarms_timer_callback, NULL);
+   os_timer_arm(&ignore_false_alarms_timer_g, IGNORE_FALSE_ALARMS_TIMEOUT_SEC * 1000, 0);
+}
+
 void stop_ignoring_alarms_timer_callback() {
    reset_flag(&general_flags, IGNORE_ALARMS_FLAG);
 }
 
-void read_pin_state_timer_callback(void *arg) {
-   unsigned int status = (unsigned int) arg;
-   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
+void stop_ignoring_false_alarms_timer_callback() {
+   reset_flag(&general_flags, IGNORE_FALSE_ALARMS_FLAG);
+}
 
-   if (status == MOTION_DETECTOR_INPUT_PIN &&
-         !read_input_pin_state(MOTION_DETECTOR_INPUT_PIN) &&
-         !read_flag(general_flags, IGNORE_ALARMS_FLAG) &&
-         read_output_pin_state(MOTION_SENSOR_ENABLE_PIN)) {
-      set_flag(&general_flags, IGNORE_ALARMS_FLAG);
-      os_timer_disarm(&ignore_alarms_timer_g);
-      os_timer_setfn(&ignore_alarms_timer_g, (os_timer_func_t *) stop_ignoring_alarms_timer_callback, NULL);
-      os_timer_arm(&ignore_alarms_timer_g, IGNORE_ALARMS_TIMEOUT_SEC * 1000, 0);
-
+void recheck_false_alarm_callback() {
+   if (!read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
+      // Alarm still wasn't sent
+      ignore_false_alarms();
       xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 256, NULL, 2, NULL);
    }
+}
+
+void read_pin_state_timer_callback(void *arg) {
+   unsigned int status = (unsigned int) arg;
+
+   if (status == MOTION_DETECTOR_INPUT_PIN) {
+      gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_POSEDGE); // See pins_config
+
+      if (!read_flag(general_flags, IGNORE_MOTION_DETECTOR_FLAG) &&
+            read_input_pin_state(MOTION_DETECTOR_INPUT_PIN) && !read_flag(general_flags, IGNORE_ALARMS_FLAG)) {
+         ignore_alarms();
+         ignore_false_alarms();
+
+         xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 256, NULL, 2, NULL);
+      }
+   } else if (status == MOTION_DETECTOR_INPUT_MW_LED_PIN) {
+      gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_MW_LED_PIN_ID, GPIO_PIN_INTR_NEGEDGE); // See pins_config
+
+      if (!read_flag(general_flags, IGNORE_MOTION_DETECTOR_FLAG) &&
+            !read_input_pin_state(MOTION_DETECTOR_INPUT_MW_LED_PIN) && !read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
+         os_timer_disarm(&recheck_false_alarm_timer_g);
+         os_timer_setfn(&recheck_false_alarm_timer_g, (os_timer_func_t *) recheck_false_alarm_callback, NULL);
+         os_timer_arm(&recheck_false_alarm_timer_g, RECHECK_FALSE_ALARMS_STATE_TIMEOUT_SEC * 1000, 0);
+      }
+   }
+}
+
+void arm_pin_state_timer(unsigned char pin_number, unsigned int status) {
+   gpio_pin_intr_state_set(pin_number, GPIO_PIN_INTR_DISABLE);
+
+   os_timer_t *timer = &pin_state_timers_g[pin_number];
+
+   os_timer_disarm(timer);
+   os_timer_setfn(timer, (os_timer_func_t *) read_pin_state_timer_callback, (void *) status);
+   os_timer_arm(timer, 300, 0);
 }
 
 void pins_interrupt_handler() {
@@ -928,29 +909,33 @@ void pins_interrupt_handler() {
    //clear interrupt status
    GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, status);
 
-   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_DISABLE);
-
-   os_timer_disarm(&pins_state_timer_g);
-   os_timer_setfn(&pins_state_timer_g, (os_timer_func_t *) read_pin_state_timer_callback, (void *) status);
-   os_timer_arm(&pins_state_timer_g, 500, 0);
+   if (status == MOTION_DETECTOR_INPUT_PIN) {
+      arm_pin_state_timer(MOTION_DETECTOR_INPUT_PIN_ID, status);
+   } else if (status == MOTION_DETECTOR_INPUT_MW_LED_PIN) {
+      arm_pin_state_timer(MOTION_DETECTOR_INPUT_MW_LED_PIN_ID, status);
+   }
 }
 
-pins_config() {
+void pins_config() {
    GPIO_ConfigTypeDef output_pins;
    output_pins.GPIO_Mode = GPIO_Mode_Output;
-   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN | BUZZER_PIN | MOTION_SENSOR_ENABLE_PIN;
+   output_pins.GPIO_Pin = AP_CONNECTION_STATUS_LED_PIN | SERVER_AVAILABILITY_STATUS_LED_PIN | BUZZER_PIN | MOTION_DETECTOR_ENABLE_PIN;
    pin_output_reset(AP_CONNECTION_STATUS_LED_PIN);
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    pin_output_reset(BUZZER_PIN);
-   pin_output_reset(MOTION_SENSOR_ENABLE_PIN);
    gpio_config(&output_pins);
 
    GPIO_ConfigTypeDef input_pins;
    input_pins.GPIO_Mode = GPIO_Mode_Input;
    input_pins.GPIO_Pin = MOTION_DETECTOR_INPUT_PIN;
    input_pins.GPIO_Pullup = GPIO_PullUp_EN;
-   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
    gpio_config(&input_pins);
+   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_POSEDGE);
+
+   input_pins.GPIO_Pin = MOTION_DETECTOR_INPUT_MW_LED_PIN;
+   input_pins.GPIO_Pullup = GPIO_PullUp_DIS;
+   gpio_config(&input_pins);
+   gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_MW_LED_PIN_ID, GPIO_PIN_INTR_NEGEDGE);
 
    gpio_intr_handler_register(pins_interrupt_handler, NULL);
    enable_pins_interrupt();
@@ -981,7 +966,10 @@ void uart_config() {
 
 void user_init(void) {
    pins_config();
+   turn_motion_detector_off();
    uart_config();
+
+   vTaskDelay(5000 / portTICK_RATE_MS);
 
    #ifdef ALLOW_USE_PRINTF
    printf("\nSoftware is running from: %s\n", system_upgrade_userbin_check() ? "user2.bin" : "user1.bin");
@@ -1003,8 +991,5 @@ void user_init(void) {
    #ifdef ALLOW_USE_PRINTF
    start_100millisecons_counter();
    #endif
-   /*vSemaphoreCreateBinary(long_polling_request_semaphore_g);
-   xSemaphoreGive(long_polling_request_semaphore_g);
-   xTaskCreate(send_long_polling_requests_task, "send_long_polling_requests_task", 384, NULL, 1, NULL);*/
    //xTaskCreate(testing_task, "testing_task", 256, NULL, 1, NULL);
 }
