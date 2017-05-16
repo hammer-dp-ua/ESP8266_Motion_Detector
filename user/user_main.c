@@ -96,6 +96,10 @@ void stop_milliseconds_counter() {
 
 void stop_ignoring_motion_detector() {
    reset_flag(&general_flags, IGNORE_MOTION_DETECTOR_FLAG);
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("\n Motion detector isn't ignored anymore. Time: %u\n", milliseconds_g);
+   #endif
 }
 
 void turn_motion_detector_on() {
@@ -171,7 +175,7 @@ void ICACHE_FLASH_ATTR testing_task(void *pvParameters) {
 
 void beep_task() {
    #ifdef ALLOW_USE_PRINTF
-   printf("beep_task has been created. Time: %u\n", milliseconds_g);
+   printf("\n beep_task has been created. Time: %u\n", milliseconds_g);
    #endif
 
    //vSemaphoreCreateBinary(buzzer_semaphore_g);
@@ -188,9 +192,9 @@ void beep_task() {
       pin_output_reset(BUZZER_PIN);
    }
 
-   vSemaphoreDelete(buzzer_semaphore_g);
+   vSemaphoreDelete(buzzer_semaphore_g);*/
    buzzer_semaphore_g = NULL;
-   vTaskDelete(NULL);*/
+   vTaskDelete(NULL);
 }
 
 void successfull_connected_tcp_handler_callback(void *arg) {
@@ -298,9 +302,9 @@ void status_request_on_error_callback(struct espconn *connection) {
    request_finish_action(connection, semaphores_to_give);
 }
 
-void alarm_request_on_error_callback(struct espconn *connection) {
+void general_request_on_error_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("alarm_request_on_error_callback. Time: %u\n", milliseconds_g);
+   printf("general_request_on_error_callback. Time: %u\n", milliseconds_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -347,9 +351,9 @@ void status_request_on_succeed_callback(struct espconn *connection) {
    }
 }
 
-void alarm_request_on_succeed_callback(struct espconn *connection) {
+void general_request_on_succeed_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("alarm_request_on_succeed_callback. Time: %u\n", milliseconds_g);
+   printf("general_request_on_succeed_callback. Time: %u\n", milliseconds_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -364,7 +368,7 @@ void alarm_request_on_succeed_callback(struct espconn *connection) {
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
 
-   if (parent_task) {
+   if (parent_task != NULL) {
       #ifdef ALLOW_USE_PRINTF
       printf("parent task is to be deleted...\n");
       #endif
@@ -400,13 +404,16 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
       printf("timeout_request_supervisor_task still exists\n");
       #endif
    }
+
    free(user_data);
    sint8 error_code = espconn_delete(connection);
+
    if (error_code != 0) {
       #ifdef ALLOW_USE_PRINTF
       printf("ERROR! Connection is still in progress\n");
       #endif
    }
+
    free(connection);
 
    if (semaphores_to_give) {
@@ -695,27 +702,27 @@ void send_status_requests_task(void *pvParameters) {
    }
 }
 
-void send_alarm_request_task(void *pvParameters) {
+void send_general_request_task(void *pvParameters) {
    #ifdef ALLOW_USE_PRINTF
-   printf("send_alarm_request_task has been created. Time: %u\n", milliseconds_g);
+   printf("\n send_general_request_task has been created. Time: %u\n", milliseconds_g);
    #endif
 
    if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
       vTaskDelete(NULL);
    }
 
-   xTaskCreate(beep_task, "beep_task", 176, NULL, 1, NULL);
+   GeneralRequestType request_type = (GeneralRequestType) pvParameters;
 
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
 
       #ifdef ALLOW_USE_PRINTF
-      printf("send_alarm_request_task started. Time: %u\n", milliseconds_g);
+      printf("\n send_general_request_task started. Time: %u\n", milliseconds_g);
       #endif
 
       if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
          #ifdef ALLOW_USE_PRINTF
-         printf("Can't send alarm request, because not connected to AP. Time: %u\n", milliseconds_g);
+         printf("\n Can't send general request, because not connected to AP. Time: %u\n", milliseconds_g);
          #endif
 
          vTaskDelay(2000 / portTICK_RATE_MS);
@@ -728,13 +735,22 @@ void send_alarm_request_task(void *pvParameters) {
          vTaskDelay(REQUEST_IDLE_TIME_ON_ERROR);
       }
 
-      char *request_template = get_string_from_rom(ALARM_GET_REQUEST);
+      char *request_template = NULL;
+      char *alarm_source = NULL;
+
+      if (request_type == ALARM) {
+         request_template = get_string_from_rom(ALARM_GET_REQUEST);
+         alarm_source = get_string_from_rom(MOTION_SENSOR);
+      } else if (request_type == FALSE_ALARM) {
+         request_template = get_string_from_rom(FALSE_ALARM_GET_REQUEST);
+         alarm_source = get_string_from_rom(MW_LED);
+      }
+
       char *server_ip_address = get_string_from_rom(SERVER_IP_ADDRESS);
-      char *device_name = get_string_from_rom(DEVICE_NAME);
-      char *request_template_parameters[] = {device_name, server_ip_address, NULL};
+      char *request_template_parameters[] = {alarm_source, server_ip_address, NULL};
       char *request = set_string_parameters(request_template, request_template_parameters);
 
-      free(device_name);
+      free(alarm_source);
       free(request_template);
       free(server_ip_address);
 
@@ -749,8 +765,8 @@ void send_alarm_request_task(void *pvParameters) {
       user_data->timeout_request_supervisor_task = NULL;
       user_data->request = request;
       user_data->response = NULL;
-      user_data->execute_on_succeed = alarm_request_on_succeed_callback;
-      user_data->execute_on_error = alarm_request_on_error_callback;
+      user_data->execute_on_succeed = general_request_on_succeed_callback;
+      user_data->execute_on_error = general_request_on_error_callback;
       user_data->parent_task = xTaskGetCurrentTaskHandle();
       user_data->request_max_duration_time = REQUEST_MAX_DURATION_TIME;
       connection->reserve = user_data;
@@ -865,7 +881,7 @@ void recheck_false_alarm_callback() {
    if (!read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
       // Alarm still wasn't sent
       ignore_false_alarms();
-      xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 256, NULL, 2, NULL);
+      xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
    }
 }
 
@@ -880,7 +896,8 @@ void read_pin_state_timer_callback(void *arg) {
          ignore_alarms();
          ignore_false_alarms();
 
-         xTaskCreate(send_alarm_request_task, "send_alarm_request_task", 256, NULL, 2, NULL);
+         xTaskCreate(beep_task, "beep_task", 200, NULL, 1, NULL);
+         xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) ALARM, 2, NULL);
       }
    } else if (status == MOTION_DETECTOR_INPUT_MW_LED_PIN) {
       gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_MW_LED_PIN_ID, GPIO_PIN_INTR_NEGEDGE); // See pins_config

@@ -38,7 +38,7 @@
 #define RECHECK_FALSE_ALARMS_STATE_TIMEOUT_SEC  5
 
 #if RECHECK_FALSE_ALARMS_STATE_TIMEOUT_SEC >= IGNORE_FALSE_ALARMS_TIMEOUT_SEC
-   #error "Recheck the variables logic"
+   #error "Check constants values"
 #endif
 
 typedef enum {
@@ -62,7 +62,13 @@ char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
       "\"errors\":\"<3>\","
       "\"buildTimestamp\":\"<4>\"}";
 char ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
-      "GET /server/esp8266/alarm?alarmSource=<1> HTTP/1.1\r\n"
+      "GET /server/esp8266/testAlarm?alarmSource=<1> HTTP/1.1\r\n"
+      "Host: <2>\r\n"
+      "User-Agent: ESP8266\r\n"
+      "Connection: close\r\n"
+      "Accept: application/json\r\n\r\n";
+char FALSE_ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
+      "GET /server/esp8266/falseAlarm?alarmSource=<1> HTTP/1.1\r\n"
       "Host: <2>\r\n"
       "User-Agent: ESP8266\r\n"
       "Connection: close\r\n"
@@ -73,6 +79,8 @@ char FIRMWARE_UPDATE_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "Host: <2>\r\n"
       "User-Agent: ESP8266\r\n"
       "Connection: close\r\n\r\n";
+char MW_LED[] ICACHE_RODATA_ATTR = "MW_LED";
+char MOTION_SENSOR[] ICACHE_RODATA_ATTR = "MOTION_SENSOR";
 
 struct connection_user_data {
    bool response_received;
@@ -90,7 +98,7 @@ void send_long_polling_requests_task(void *pvParameters);
 void autoconnect_task(void *pvParameters);
 void activate_status_requests_task_task(void *pvParameters);
 void send_status_requests_task(void *pvParameters);
-void send_alarm_request_task(void *pvParameters);
+void send_general_request_task(void *pvParameters);
 void beep_task();
 void successfull_connected_tcp_handler_callback(void *arg);
 void successfull_disconnected_tcp_handler_callback();

@@ -1,12 +1,12 @@
 @echo off
 
 Rem ******NOTICE******
-Rem MUST set SDK_PATH & BIN_PATH firstly!!!
-Rem example:
-Rem set SDK_PATH=/c/esp_iot_sdk_freertos
-Rem set BIN_PATH=/c/esp8266_bin
+:: MUST set SDK_PATH & BIN_PATH firstly!!!
+:: example:
+:: set SDK_PATH=/c/esp_iot_sdk_freertos
+:: set BIN_PATH=/c/esp8266_bin
 
-rem set SDK_PATH=C:\Users\USER\ESP8266\ESP8266_RTOS_SDK
+:: set SDK_PATH=C:\Users\USER\ESP8266\ESP8266_RTOS_SDK
 set SDK_PATH=/c/Users/USER/ESP8266/ESP8266_RTOS_SDK
 set BIN_PATH_WIN=C:\Users\USER\ESP8266\ESP8266_RTOS_SDK\bin
 set BIN_PATH=/c/Users/USER/ESP8266/ESP8266_RTOS_SDK/bin
