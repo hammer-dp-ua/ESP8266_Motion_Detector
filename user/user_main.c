@@ -17,7 +17,7 @@
 #include "user_main.h"
 #include "global_printf_usage.h"
 
-unsigned int milliseconds_g;
+unsigned int milliseconds_counter_g;
 int signal_strength_g;
 unsigned short errors_counter_g;
 
@@ -81,13 +81,13 @@ uint32 user_rf_cal_sector_set(void) {
 }
 
 LOCAL void milliseconds_counter() {
-   milliseconds_g++;
+   milliseconds_counter_g++;
 }
 
 void start_100millisecons_counter() {
    os_timer_disarm(&millisecons_time_serv_g);
    os_timer_setfn(&millisecons_time_serv_g, (os_timer_func_t *) milliseconds_counter, NULL);
-   os_timer_arm(&millisecons_time_serv_g, 100, 1); // 100 ms
+   os_timer_arm(&millisecons_time_serv_g, 1000 / MILLISECONDS_COUNTER_DIVIDER, 1); // 100 ms
 }
 
 void stop_milliseconds_counter() {
@@ -98,7 +98,7 @@ void stop_ignoring_motion_detector() {
    reset_flag(&general_flags, IGNORE_MOTION_DETECTOR_FLAG);
 
    #ifdef ALLOW_USE_PRINTF
-   printf("\n Motion detector isn't ignored anymore. Time: %u\n", milliseconds_g);
+   printf("\n Motion detector isn't ignored anymore. Time: %u\n", milliseconds_counter_g);
    #endif
 }
 
@@ -175,7 +175,7 @@ void ICACHE_FLASH_ATTR testing_task(void *pvParameters) {
 
 void beep_task() {
    #ifdef ALLOW_USE_PRINTF
-   printf("\n beep_task has been created. Time: %u\n", milliseconds_g);
+   printf("\n beep_task has been created. Time: %u\n", milliseconds_counter_g);
    #endif
 
    //vSemaphoreCreateBinary(buzzer_semaphore_g);
@@ -232,7 +232,7 @@ void successfull_disconnected_tcp_handler_callback(void *arg) {
    bool response_received = user_data->response_received;
 
    #ifdef ALLOW_USE_PRINTF
-   printf("Disconnected callback beginning. Response %s received. Time: %u\n", response_received ? "has been" : "has not been", milliseconds_g);
+   printf("Disconnected callback beginning. Response %s received. Time: %u\n", response_received ? "has been" : "has not been", milliseconds_counter_g);
    #endif
 
    void (*execute_on_succeed)(struct espconn *connection) = user_data->execute_on_succeed;
@@ -243,7 +243,7 @@ void successfull_disconnected_tcp_handler_callback(void *arg) {
 
 void tcp_connection_error_handler_callback(void *arg, sint8 err) {
    #ifdef ALLOW_USE_PRINTF
-   printf("Connection error callback. Error code: %d. Time: %u\n", err, milliseconds_g);
+   printf("Connection error callback. Error code: %d. Time: %u\n", err, milliseconds_counter_g);
    #endif
 
    struct espconn *connection = arg;
@@ -269,7 +269,7 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
          user_data->response = response;
 
          #ifdef ALLOW_USE_PRINTF
-         printf("Response received: %sTime: %u\n", pdata, milliseconds_g);
+         printf("Response received: %sTime: %u\n", pdata, milliseconds_counter_g);
          #endif
       }
       free(server_sent);
@@ -289,7 +289,7 @@ void tcp_request_successfully_written_into_buffer_handler_callback() {
 
 void status_request_on_error_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("status_request_on_error_callback. Time: %u\n", milliseconds_g);
+   printf("status_request_on_error_callback. Time: %u\n", milliseconds_counter_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -304,7 +304,7 @@ void status_request_on_error_callback(struct espconn *connection) {
 
 void general_request_on_error_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("general_request_on_error_callback. Time: %u\n", milliseconds_g);
+   printf("general_request_on_error_callback. Time: %u\n", milliseconds_counter_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -328,7 +328,7 @@ void check_for_update_firmware(char *response) {
 
 void status_request_on_succeed_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("status_request_on_succeed_callback, Time: %u\n", milliseconds_g);
+   printf("status_request_on_succeed_callback, Time: %u\n", milliseconds_counter_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -353,7 +353,7 @@ void status_request_on_succeed_callback(struct espconn *connection) {
 
 void general_request_on_succeed_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("general_request_on_succeed_callback. Time: %u\n", milliseconds_g);
+   printf("general_request_on_succeed_callback. Time: %u\n", milliseconds_counter_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -432,7 +432,7 @@ void timeout_request_supervisor_task(void *pvParameters) {
    vTaskDelay(user_data->request_max_duration_time);
 
    #ifdef ALLOW_USE_PRINTF
-   printf("Request timeout. Time: %u\n", milliseconds_g);
+   printf("Request timeout. Time: %u\n", milliseconds_counter_g);
    #endif
 
    if (connection->state == ESPCONN_CONNECT) {
@@ -463,14 +463,14 @@ void ota_finished_callback(void *arg) {
 
    if (update->upgrade_flag == true) {
       #ifdef ALLOW_USE_PRINTF
-      printf("[OTA] success; rebooting! Time: %u\n", milliseconds_g);
+      printf("[OTA] success; rebooting! Time: %u\n", milliseconds_counter_g);
       #endif
 
       system_upgrade_flag_set(UPGRADE_FLAG_FINISH);
       system_upgrade_reboot();
    } else {
       #ifdef ALLOW_USE_PRINTF
-      printf("[OTA] failed! Time: %u\n", milliseconds_g);
+      printf("[OTA] failed! Time: %u\n", milliseconds_counter_g);
       #endif
 
       system_restart();
@@ -497,7 +497,7 @@ void blink_leds_while_updating_task(void *pvParameters) {
 
 void upgrade_firmware() {
    #ifdef ALLOW_USE_PRINTF
-   printf("\nUpdating firmware... Time: %u\n", milliseconds_g);
+   printf("\nUpdating firmware... Time: %u\n", milliseconds_counter_g);
    #endif
 
    turn_motion_detector_off();
@@ -616,12 +616,12 @@ void send_status_requests_task(void *pvParameters) {
       }
 
       #ifdef ALLOW_USE_PRINTF
-      printf("send_status_requests_task started. Time: %u\n", milliseconds_g);
+      printf("send_status_requests_task started. Time: %u\n", milliseconds_counter_g);
       #endif
 
       if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
          #ifdef ALLOW_USE_PRINTF
-         printf("Can't send status request, because not connected to AP. Time: %u\n", milliseconds_g);
+         printf("Can't send status request, because not connected to AP. Time: %u\n", milliseconds_counter_g);
          #endif
 
          xSemaphoreGive(requests_mutex_g);
@@ -644,9 +644,11 @@ void send_status_requests_task(void *pvParameters) {
       char *device_name = get_string_from_rom(DEVICE_NAME);
       char errors_counter[5];
       sprintf(errors_counter, "%d", errors_counter_g);
+      char uptime[10];
+      sprintf(uptime, "%d", milliseconds_counter_g / MILLISECONDS_COUNTER_DIVIDER);
       char build_timestamp[30];
       sprintf(build_timestamp, "%s", __TIMESTAMP__);
-      char *status_info_request_payload_template_parameters[] = {signal_strength, device_name, errors_counter, build_timestamp, NULL};
+      char *status_info_request_payload_template_parameters[] = {signal_strength, device_name, errors_counter, uptime, build_timestamp, NULL};
       char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD);
       char *request_payload = set_string_parameters(status_info_request_payload_template, status_info_request_payload_template_parameters);
 
@@ -704,7 +706,7 @@ void send_status_requests_task(void *pvParameters) {
 
 void send_general_request_task(void *pvParameters) {
    #ifdef ALLOW_USE_PRINTF
-   printf("\n send_general_request_task has been created. Time: %u\n", milliseconds_g);
+   printf("\n send_general_request_task has been created. Time: %u\n", milliseconds_counter_g);
    #endif
 
    if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
@@ -717,12 +719,12 @@ void send_general_request_task(void *pvParameters) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
 
       #ifdef ALLOW_USE_PRINTF
-      printf("\n send_general_request_task started. Time: %u\n", milliseconds_g);
+      printf("\n send_general_request_task started. Time: %u\n", milliseconds_counter_g);
       #endif
 
       if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
          #ifdef ALLOW_USE_PRINTF
-         printf("\n Can't send general request, because not connected to AP. Time: %u\n", milliseconds_g);
+         printf("\n Can't send general request, because not connected to AP. Time: %u\n", milliseconds_counter_g);
          #endif
 
          vTaskDelay(2000 / portTICK_RATE_MS);
@@ -949,6 +951,7 @@ void pins_config() {
    gpio_config(&input_pins);
    gpio_pin_intr_state_set(MOTION_DETECTOR_INPUT_PIN_ID, GPIO_PIN_INTR_POSEDGE);
 
+   // There is +5V on LED when it is not active
    input_pins.GPIO_Pin = MOTION_DETECTOR_INPUT_MW_LED_PIN;
    input_pins.GPIO_Pullup = GPIO_PullUp_DIS;
    gpio_config(&input_pins);
@@ -1005,8 +1008,6 @@ void user_init(void) {
 
    xTaskCreate(send_status_requests_task, "send_status_requests_task", 256, NULL, 1, NULL);
 
-   #ifdef ALLOW_USE_PRINTF
    start_100millisecons_counter();
-   #endif
    //xTaskCreate(testing_task, "testing_task", 256, NULL, 1, NULL);
 }

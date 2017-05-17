@@ -37,6 +37,8 @@
 #define IGNORE_FALSE_ALARMS_TIMEOUT_SEC         20
 #define RECHECK_FALSE_ALARMS_STATE_TIMEOUT_SEC  5
 
+#define MILLISECONDS_COUNTER_DIVIDER 10
+
 #if RECHECK_FALSE_ALARMS_STATE_TIMEOUT_SEC >= IGNORE_FALSE_ALARMS_TIMEOUT_SEC
    #error "Check constants values"
 #endif
@@ -60,7 +62,8 @@ char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
       "{\"gain\":\"<1>\","
       "\"deviceName\":\"<2>\","
       "\"errors\":\"<3>\","
-      "\"buildTimestamp\":\"<4>\"}";
+      "\"uptime\":\"<4>\","
+      "\"buildTimestamp\":\"<5>\"}";
 char ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "GET /server/esp8266/testAlarm?alarmSource=<1> HTTP/1.1\r\n"
       "Host: <2>\r\n"
