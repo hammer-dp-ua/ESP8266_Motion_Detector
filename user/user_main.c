@@ -292,9 +292,6 @@ void status_request_on_error_callback(struct espconn *connection) {
    printf("status_request_on_error_callback. Time: %u\n", milliseconds_counter_g);
    #endif
 
-   struct connection_user_data *user_data = connection->reserve;
-   char *request = user_data->request;
-
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
@@ -306,9 +303,6 @@ void general_request_on_error_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
    printf("general_request_on_error_callback. Time: %u\n", milliseconds_counter_g);
    #endif
-
-   struct connection_user_data *user_data = connection->reserve;
-   char *request = user_data->request;
 
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
@@ -333,7 +327,7 @@ void status_request_on_succeed_callback(struct espconn *connection) {
 
    struct connection_user_data *user_data = connection->reserve;
 
-   if (!user_data->response_received && user_data->execute_on_error) {
+   if (!user_data->response_received && user_data->execute_on_error != NULL) {
       user_data->execute_on_error(connection);
       return;
    }
@@ -344,7 +338,7 @@ void status_request_on_succeed_callback(struct espconn *connection) {
    xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
    request_finish_action(connection, semaphores_to_give);
 
-   xTaskCreate(activate_status_requests_task_task, "activate_status_requests_task_task", 256, NULL, 1, NULL);
+   xTaskCreate(activate_status_requests_task_task, "activate_status_requests_task_task", 200, NULL, 2, NULL);
 
    if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
       upgrade_firmware();
@@ -359,7 +353,7 @@ void general_request_on_succeed_callback(struct espconn *connection) {
    struct connection_user_data *user_data = connection->reserve;
    xTaskHandle parent_task = user_data->parent_task;
 
-   if (!user_data->response_received && user_data->execute_on_error) {
+   if (!user_data->response_received && user_data->execute_on_error != NULL) {
       user_data->execute_on_error(connection);
       return;
    }
@@ -386,10 +380,9 @@ void general_request_on_succeed_callback(struct espconn *connection) {
 
 void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphores_to_give[]) {
    struct connection_user_data *user_data = connection->reserve;
-   char *request = user_data->request;
 
-   if (request != NULL) {
-      free(request);
+   if (user_data->request != NULL) {
+      free(user_data->request);
       user_data->request = NULL;
    }
    if (user_data->response != NULL) {
@@ -398,11 +391,11 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
    }
 
    if (user_data->timeout_request_supervisor_task != NULL) {
-      vTaskDelete(user_data->timeout_request_supervisor_task);
-
       #ifdef ALLOW_USE_PRINTF
-      printf("timeout_request_supervisor_task still exists\n");
+      printf("\n timeout_request_supervisor_task still exists\n");
       #endif
+
+      vTaskDelete(user_data->timeout_request_supervisor_task);
    }
 
    free(user_data);
@@ -410,13 +403,13 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
 
    if (error_code != 0) {
       #ifdef ALLOW_USE_PRINTF
-      printf("ERROR! Connection is still in progress\n");
+      printf("\n ERROR! Connection still is in progress\n");
       #endif
    }
 
    free(connection);
 
-   if (semaphores_to_give) {
+   if (semaphores_to_give != NULL) {
       unsigned char i;
       for (i = 0; semaphores_to_give[i] != NULL; i++) {
          xSemaphoreHandle semaphore_to_give = semaphores_to_give[i];
@@ -432,27 +425,23 @@ void timeout_request_supervisor_task(void *pvParameters) {
    vTaskDelay(user_data->request_max_duration_time);
 
    #ifdef ALLOW_USE_PRINTF
-   printf("Request timeout. Time: %u\n", milliseconds_counter_g);
+   printf("\n Request timeout. Time: %u\n", milliseconds_counter_g);
    #endif
 
    if (connection->state == ESPCONN_CONNECT) {
       #ifdef ALLOW_USE_PRINTF
-      printf("Was connected\n");
+      printf("\n Was connected\n");
       #endif
 
       espconn_disconnect(connection);
-   } else {
-      #ifdef ALLOW_USE_PRINTF
-      printf("Some another connection timeout error\n");
-      #endif
+   }
 
-      // To not delete this task in other functions
-      user_data->timeout_request_supervisor_task = NULL;
+   // To not delete this task in other functions
+   user_data->timeout_request_supervisor_task = NULL;
 
-      void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
-      if (execute_on_error != NULL) {
-         execute_on_error(connection);
-      }
+   void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+   if (execute_on_error != NULL) {
+      execute_on_error(connection);
    }
 
    vTaskDelete(NULL);
@@ -531,9 +520,9 @@ void upgrade_firmware() {
 }
 
 void establish_connection(struct espconn *connection) {
-   if (!connection) {
+   if (connection == NULL) {
       #ifdef ALLOW_USE_PRINTF
-      printf("Create connection first\n");
+      printf("\n Create connection first\n");
       #endif
 
       return;
@@ -542,54 +531,59 @@ void establish_connection(struct espconn *connection) {
    int connection_status = espconn_connect(connection);
 
    #ifdef ALLOW_USE_PRINTF
-   printf("Connection status: ");
+   printf("\n Connection status: ");
    #endif
 
    switch (connection_status) {
       case ESPCONN_OK:
       {
          struct connection_user_data *user_data = connection->reserve;
+         xTaskHandle created_supervisor_task;
 
-         if (user_data && user_data->timeout_request_supervisor_task) {
-            xTaskCreate(timeout_request_supervisor_task, "timeout_request_supervisor_task", 256, connection, 1, user_data->timeout_request_supervisor_task);
+         if (user_data != NULL) {
+            xTaskCreate(timeout_request_supervisor_task, "timeout_request_supervisor_task", 256, connection, 2, &created_supervisor_task);
+            user_data->timeout_request_supervisor_task = created_supervisor_task;
          }
 
          #ifdef ALLOW_USE_PRINTF
-         printf("Connected\n");
+         printf("Connected");
          #endif
 
          break;
       }
       case ESPCONN_RTE:
          #ifdef ALLOW_USE_PRINTF
-         printf("Routing problem\n");
+         printf("Routing problem");
          #endif
 
          break;
       case ESPCONN_MEM:
          #ifdef ALLOW_USE_PRINTF
-         printf("Out of memory\n");
+         printf("Out of memory");
          #endif
 
          break;
       case ESPCONN_ISCONN:
          #ifdef ALLOW_USE_PRINTF
-         printf("Already connected\n");
+         printf("Already connected");
          #endif
 
          break;
       case ESPCONN_ARG:
          #ifdef ALLOW_USE_PRINTF
-         printf("Illegal argument\n");
+         printf("Illegal argument");
          #endif
 
          break;
    }
+   #ifdef ALLOW_USE_PRINTF
+   printf(". Time: %u\n", milliseconds_counter_g);
+   #endif
 
    if (connection_status != ESPCONN_OK) {
       struct connection_user_data *user_data = connection->reserve;
 
-      if (user_data && user_data->execute_on_error) {
+      if (user_data != NULL && user_data->execute_on_error != NULL) {
          user_data->execute_on_error(connection);
       }
    }
@@ -985,6 +979,7 @@ void uart_config() {
 }
 
 void user_init(void) {
+   start_100millisecons_counter();
    pins_config();
    turn_motion_detector_off();
    uart_config();
@@ -1008,6 +1003,5 @@ void user_init(void) {
 
    xTaskCreate(send_status_requests_task, "send_status_requests_task", 256, NULL, 1, NULL);
 
-   start_100millisecons_counter();
    //xTaskCreate(testing_task, "testing_task", 256, NULL, 1, NULL);
 }
