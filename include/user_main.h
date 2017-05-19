@@ -26,6 +26,7 @@
 #define IGNORE_ALARMS_FLAG                         16
 #define IGNORE_FALSE_ALARMS_FLAG                   32
 #define IGNORE_MOTION_DETECTOR_FLAG                64
+#define MANUALLY_IGNORE_ALARMS_FLAG                128
 
 #define REQUEST_IDLE_TIME_ON_ERROR              (10000 / portTICK_RATE_MS) // 10 sec
 #define REQUEST_MAX_DURATION_TIME               (10000 / portTICK_RATE_MS) // 10 sec
@@ -77,6 +78,7 @@ char FALSE_ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "Connection: close\r\n"
       "Accept: application/json\r\n\r\n";
 char UPDATE_FIRMWARE[] ICACHE_RODATA_ATTR = "\"updateFirmware\":true";
+char MANUALLY_IGNORE_ALARMS[] ICACHE_RODATA_ATTR = "\"ignoreAlarms\":true";
 char FIRMWARE_UPDATE_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "GET /esp8266_fota/<1> HTTP/1.1\r\n"
       "Host: <2>\r\n"

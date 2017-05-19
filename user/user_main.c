@@ -314,10 +314,21 @@ void general_request_on_error_callback(struct espconn *connection) {
 void check_for_update_firmware(char *response) {
    char *update_firmware_json_element = get_string_from_rom(UPDATE_FIRMWARE);
 
-   if (strstr(response, update_firmware_json_element)) {
+   if (strstr(response, update_firmware_json_element) != NULL) {
       set_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
    }
    free(update_firmware_json_element);
+}
+
+void check_for_manually_ignoring_alarms(char *response) {
+   char *manually_ignore_alarms_json_element = get_string_from_rom(MANUALLY_IGNORE_ALARMS);
+
+   if (strstr(response, manually_ignore_alarms_json_element) != NULL) {
+      set_flag(&general_flags, MANUALLY_IGNORE_ALARMS_FLAG);
+   } else {
+      reset_flag(&general_flags, MANUALLY_IGNORE_ALARMS_FLAG);
+   }
+   free(manually_ignore_alarms_json_element);
 }
 
 void status_request_on_succeed_callback(struct espconn *connection) {
@@ -333,6 +344,7 @@ void status_request_on_succeed_callback(struct espconn *connection) {
    }
 
    check_for_update_firmware(user_data->response);
+   check_for_manually_ignoring_alarms(user_data->response);
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
    xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
@@ -892,7 +904,9 @@ void read_pin_state_timer_callback(void *arg) {
          ignore_alarms();
          ignore_false_alarms();
 
-         xTaskCreate(beep_task, "beep_task", 200, NULL, 1, NULL);
+         if (!read_flag(general_flags, MANUALLY_IGNORE_ALARMS_FLAG)) {
+            xTaskCreate(beep_task, "beep_task", 200, NULL, 1, NULL);
+         }
          xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) ALARM, 2, NULL);
       }
    } else if (status == MOTION_DETECTOR_INPUT_MW_LED_PIN) {
@@ -979,15 +993,16 @@ void uart_config() {
 }
 
 void user_init(void) {
-   start_100millisecons_counter();
    pins_config();
    turn_motion_detector_off();
    uart_config();
 
+   start_100millisecons_counter();
+
    vTaskDelay(5000 / portTICK_RATE_MS);
 
    #ifdef ALLOW_USE_PRINTF
-   printf("\nSoftware is running from: %s\n", system_upgrade_userbin_check() ? "user2.bin" : "user1.bin");
+   printf("\n Software is running from: %s\n", system_upgrade_userbin_check() ? "user2.bin" : "user1.bin");
    #endif
 
    wifi_set_event_handler_cb(wifi_event_handler_callback);
