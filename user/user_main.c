@@ -7,15 +7,16 @@
 #include "gpio.h"
 #include "esp_sta.h"
 #include "esp_wifi.h"
+#include "global_definitions.h"
+#include "malloc_logger.h"
 #include "upgrade.h"
-#include "freertos/FreeRTOS.h"
+#include "FREErtos/FREERTOS.h"
 #include "device_settings.h"
 #include "espconn.h"
 #include "utils.h"
 #include "lwip/sys.h"
 #include "lwip/inet.h"
 #include "user_main.h"
-#include "global_printf_usage.h"
 
 unsigned int milliseconds_counter_g;
 int signal_strength_g;
@@ -140,7 +141,7 @@ void scan_access_point_task(void *pvParameters) {
 
          ap_scan_config.ssid = default_access_point_name;
          wifi_station_scan(&ap_scan_config, get_ap_signal_strength);
-         free(default_access_point_name);
+         FREE(default_access_point_name);
 
          vTaskDelay(rescan_when_connected_task_delay);
       } else {
@@ -160,17 +161,6 @@ void autoconnect_task(void *pvParameters) {
       }
       vTaskDelay(task_delay);
    }
-}
-
-void ICACHE_FLASH_ATTR testing_task(void *pvParameters) {
-   vTaskDelay(10000 / portTICK_RATE_MS);
-
-   #ifdef ALLOW_USE_PRINTF
-   printf("Address of upgrade_firmware function: 0x%x\n", upgrade_firmware);
-   #endif
-   upgrade_firmware();
-
-   vTaskDelete(NULL);
 }
 
 void beep_task() {
@@ -215,7 +205,7 @@ void successfull_connected_tcp_handler_callback(void *arg) {
    //keepalive_error_code |= espconn_set_keepalive(connection, ESPCONN_KEEPCNT, &espconn_keepcnt_value);
 
    int sent_status = espconn_send(connection, request, request_length);
-   free(request);
+   FREE(request);
    user_data->request = NULL;
 
    if (sent_status != 0) {
@@ -264,7 +254,13 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
 
       if (strstr(pdata, server_sent)) {
          user_data->response_received = true;
+
+         #ifdef USE_MALLOC_LOGGER
+         char *response = malloc_logger(len, __LINE__);
+         #else
          char *response = malloc(len);
+         #endif
+
          memcpy(response, pdata, len);
          user_data->response = response;
 
@@ -272,7 +268,7 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
          printf("Response received: %sTime: %u\n", pdata, milliseconds_counter_g);
          #endif
       }
-      free(server_sent);
+      FREE(server_sent);
    }
 
    // Don't call this API in any espconn callback. If needed, please use system task to trigger espconn_disconnect.
@@ -317,7 +313,7 @@ void check_for_update_firmware(char *response) {
    if (strstr(response, update_firmware_json_element) != NULL) {
       set_flag(&general_flags, UPDATE_FIRMWARE_FLAG);
    }
-   free(update_firmware_json_element);
+   FREE(update_firmware_json_element);
 }
 
 void check_for_manually_ignoring_alarms(char *response) {
@@ -328,7 +324,7 @@ void check_for_manually_ignoring_alarms(char *response) {
    } else {
       reset_flag(&general_flags, MANUALLY_IGNORE_ALARMS_FLAG);
    }
-   free(manually_ignore_alarms_json_element);
+   FREE(manually_ignore_alarms_json_element);
 }
 
 void status_request_on_succeed_callback(struct espconn *connection) {
@@ -394,11 +390,11 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
    struct connection_user_data *user_data = connection->reserve;
 
    if (user_data->request != NULL) {
-      free(user_data->request);
+      FREE(user_data->request);
       user_data->request = NULL;
    }
    if (user_data->response != NULL) {
-      free(user_data->response);
+      FREE(user_data->response);
       user_data->response = NULL;
    }
 
@@ -410,7 +406,7 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
       vTaskDelete(user_data->timeout_request_supervisor_task);
    }
 
-   free(user_data);
+   FREE(user_data);
    sint8 error_code = espconn_delete(connection);
 
    if (error_code != 0) {
@@ -419,7 +415,7 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
       #endif
    }
 
-   free(connection);
+   FREE(connection);
 
    if (semaphores_to_give != NULL) {
       unsigned char i;
@@ -428,6 +424,12 @@ void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphor
          xSemaphoreGive(semaphore_to_give);
       }
    }
+
+   #if defined(ALLOW_USE_PRINTF) && defined(USE_MALLOC_LOGGER)
+   printf("\n Elements amount in malloc logger list: %u\n", get_malloc_logger_list_elements_amount());
+   print_not_empty_elements_lines();
+   printf("\n Free Heap size: %u\n", xPortGetFreeHeapSize());
+   #endif
 }
 
 void timeout_request_supervisor_task(void *pvParameters) {
@@ -477,9 +479,9 @@ void ota_finished_callback(void *arg) {
       system_restart();
    }
 
-   free(&update->sockaddrin);
-   free(update->url);
-   free(update);
+   FREE(&update->sockaddrin);
+   FREE(update->url);
+   FREE(update);
 }
 
 void blink_leds_while_updating_task(void *pvParameters) {
@@ -525,8 +527,8 @@ void upgrade_firmware() {
    char *url_parameters[] = {file_to_download, server_ip, NULL};
    char *url = set_string_parameters(url_pattern, url_parameters);
 
-   free(url_pattern);
-   free(server_ip);
+   FREE(url_pattern);
+   FREE(server_ip);
    upgrade_server->url = url;
    system_upgrade_start(upgrade_server);
 }
@@ -658,8 +660,8 @@ void send_status_requests_task(void *pvParameters) {
       char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD);
       char *request_payload = set_string_parameters(status_info_request_payload_template, status_info_request_payload_template_parameters);
 
-      free(device_name);
-      free(status_info_request_payload_template);
+      FREE(device_name);
+      FREE(status_info_request_payload_template);
 
       char *request_template = get_string_from_rom(STATUS_INFO_POST_REQUEST);
       unsigned short request_payload_length = strnlen(request_payload, 0xFFFF);
@@ -669,16 +671,21 @@ void send_status_requests_task(void *pvParameters) {
       char *request_template_parameters[] = {request_payload_length_string, server_ip_address, request_payload, NULL};
       char *request = set_string_parameters(request_template, request_template_parameters);
 
-      free(request_payload);
-      free(request_template);
-      free(server_ip_address);
+      FREE(request_payload);
+      FREE(request_template);
+      FREE(server_ip_address);
 
       #ifdef ALLOW_USE_PRINTF
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
+      #ifdef USE_MALLOC_LOGGER
+      struct espconn *connection = (struct espconn *) zalloc_logger(sizeof(struct espconn), __LINE__);
+      struct connection_user_data *user_data = (struct connection_user_data *) zalloc_logger(sizeof(struct connection_user_data), __LINE__);
+      #else
       struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
       struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
+      #endif
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
@@ -758,16 +765,21 @@ void send_general_request_task(void *pvParameters) {
       char *request_template_parameters[] = {alarm_source, server_ip_address, NULL};
       char *request = set_string_parameters(request_template, request_template_parameters);
 
-      free(alarm_source);
-      free(request_template);
-      free(server_ip_address);
+      FREE(alarm_source);
+      FREE(request_template);
+      FREE(server_ip_address);
 
       #ifdef ALLOW_USE_PRINTF
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
+      #ifdef USE_MALLOC_LOGGER
+      struct espconn *connection = (struct espconn *) zalloc_logger(sizeof(struct espconn), __LINE__);
+      struct connection_user_data *user_data = (struct connection_user_data *) zalloc_logger(sizeof(struct connection_user_data), __LINE__);
+      #else
       struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
       struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
+      #endif
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
@@ -839,8 +851,8 @@ void set_default_wi_fi_settings() {
       memcpy(&station_config_settings_to_save.password, default_access_point_password, 64);
       wifi_station_set_config(&station_config_settings_to_save);
    }
-   free(default_access_point_name);
-   free(default_access_point_password);
+   FREE(default_access_point_name);
+   FREE(default_access_point_password);
 
    struct ip_info current_ip_info;
    wifi_get_ip_info(STATION_IF, &current_ip_info);
@@ -856,11 +868,11 @@ void set_default_wi_fi_settings() {
       ip_info_to_set.netmask.addr = ipaddr_addr(own_netmask);
       ip_info_to_set.gw.addr = ipaddr_addr(own_getaway_address);
       wifi_set_ip_info(STATION_IF, &ip_info_to_set);
-      free(own_netmask);
-      free(own_getaway_address);
+      FREE(own_netmask);
+      FREE(own_getaway_address);
    }
-   free(current_ip);
-   free(own_ip_address);
+   FREE(current_ip);
+   FREE(own_ip_address);
 }
 
 void ignore_alarms() {
@@ -889,7 +901,7 @@ void recheck_false_alarm_callback() {
    if (!read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
       // Alarm still wasn't sent
       ignore_false_alarms();
-      xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
+      //xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
    }
 }
 
@@ -992,6 +1004,14 @@ void uart_config() {
    UART_SetPrintPort(UART0);
 }
 
+void testing_task(void *pvParameters) {
+   for (;;) {
+      read_pin_state_timer_callback((void *) MOTION_DETECTOR_INPUT_PIN);
+
+      vTaskDelay(10000 / portTICK_RATE_MS);
+   }
+}
+
 void user_init(void) {
    pins_config();
    turn_motion_detector_off();
@@ -1018,5 +1038,5 @@ void user_init(void) {
 
    xTaskCreate(send_status_requests_task, "send_status_requests_task", 256, NULL, 1, NULL);
 
-   //xTaskCreate(testing_task, "testing_task", 256, NULL, 1, NULL);
+   //xTaskCreate(testing_task, "testing_task", 200, NULL, 1, NULL);
 }

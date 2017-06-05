@@ -44,6 +44,12 @@
    #error "Check constants values"
 #endif
 
+#ifdef USE_MALLOC_LOGGER
+   #define FREE(allocated_address_element_to_free) free_logger(allocated_address_element_to_free)
+#else
+   #define FREE(allocated_address_element_to_free) free(allocated_address_element_to_free)
+#endif
+
 typedef enum {
    ALARM,
    FALSE_ALARM
@@ -118,4 +124,5 @@ void pins_interrupt_handler();
 void stop_ignoring_alarms_timer_callback();
 void stop_ignoring_false_alarms_timer_callback();
 void recheck_false_alarm_callback();
+
 #endif
