@@ -255,11 +255,7 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
       if (strstr(pdata, server_sent)) {
          user_data->response_received = true;
 
-         #ifdef USE_MALLOC_LOGGER
-         char *response = malloc_logger(len, __LINE__);
-         #else
-         char *response = malloc(len);
-         #endif
+         char *response = MALLOC(len, __LINE__);
 
          memcpy(response, pdata, len);
          user_data->response = response;
@@ -507,8 +503,8 @@ void upgrade_firmware() {
 
    xTaskCreate(blink_leds_while_updating_task, "blink_leds_while_updating_task", 256, NULL, 1, NULL);
 
-   struct upgrade_server_info *upgrade_server = (struct upgrade_server_info *) zalloc(sizeof(struct upgrade_server_info));
-   struct sockaddr_in *sockaddrin = (struct sockaddr_in *) zalloc(sizeof(struct sockaddr_in));
+   struct upgrade_server_info *upgrade_server = (struct upgrade_server_info *) ZALLOC(sizeof(struct upgrade_server_info), __LINE__);
+   struct sockaddr_in *sockaddrin = (struct sockaddr_in *) ZALLOC(sizeof(struct sockaddr_in), __LINE__);
 
    upgrade_server->sockaddrin = *sockaddrin;
    upgrade_server->sockaddrin.sin_family = AF_INET;
@@ -679,13 +675,8 @@ void send_status_requests_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      #ifdef USE_MALLOC_LOGGER
-      struct espconn *connection = (struct espconn *) zalloc_logger(sizeof(struct espconn), __LINE__);
-      struct connection_user_data *user_data = (struct connection_user_data *) zalloc_logger(sizeof(struct connection_user_data), __LINE__);
-      #else
-      struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
-      struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
-      #endif
+      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__);
+      struct connection_user_data *user_data = (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__);
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
@@ -773,13 +764,8 @@ void send_general_request_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      #ifdef USE_MALLOC_LOGGER
-      struct espconn *connection = (struct espconn *) zalloc_logger(sizeof(struct espconn), __LINE__);
-      struct connection_user_data *user_data = (struct connection_user_data *) zalloc_logger(sizeof(struct connection_user_data), __LINE__);
-      #else
-      struct espconn *connection = (struct espconn *) zalloc(sizeof(struct espconn));
-      struct connection_user_data *user_data = (struct connection_user_data *) zalloc(sizeof(struct connection_user_data));
-      #endif
+      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__);
+      struct connection_user_data *user_data = (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__);
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
