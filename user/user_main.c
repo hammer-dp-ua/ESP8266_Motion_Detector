@@ -120,7 +120,7 @@ void turn_motion_detector_off() {
 
 // Callback function when AP scanning is completed
 void get_ap_signal_strength(void *arg, STATUS status) {
-   if (status == OK) {
+   if (status == OK && arg != NULL) {
       struct bss_info *got_bss_info = (struct bss_info *) arg;
 
       signal_strength_g = got_bss_info->rssi;
@@ -137,11 +137,9 @@ void scan_access_point_task(void *pvParameters) {
 
       if (status == STATION_GOT_IP) {
          struct scan_config ap_scan_config;
-         char *default_access_point_name = get_string_from_rom(ACCESS_POINT_NAME);
 
-         ap_scan_config.ssid = default_access_point_name;
+         ap_scan_config.ssid = ACCESS_POINT_NAME;
          wifi_station_scan(&ap_scan_config, get_ap_signal_strength);
-         FREE(default_access_point_name);
 
          vTaskDelay(rescan_when_connected_task_delay);
       } else {
@@ -255,7 +253,7 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
       if (strstr(pdata, server_sent)) {
          user_data->response_received = true;
 
-         char *response = MALLOC(len, __LINE__);
+         char *response = MALLOC(len, __LINE__, milliseconds_counter_g);
 
          memcpy(response, pdata, len);
          user_data->response = response;
@@ -503,8 +501,9 @@ void upgrade_firmware() {
 
    xTaskCreate(blink_leds_while_updating_task, "blink_leds_while_updating_task", 256, NULL, 1, NULL);
 
-   struct upgrade_server_info *upgrade_server = (struct upgrade_server_info *) ZALLOC(sizeof(struct upgrade_server_info), __LINE__);
-   struct sockaddr_in *sockaddrin = (struct sockaddr_in *) ZALLOC(sizeof(struct sockaddr_in), __LINE__);
+   struct upgrade_server_info *upgrade_server =
+         (struct upgrade_server_info *) ZALLOC(sizeof(struct upgrade_server_info), __LINE__, milliseconds_counter_g);
+   struct sockaddr_in *sockaddrin = (struct sockaddr_in *) ZALLOC(sizeof(struct sockaddr_in), __LINE__, milliseconds_counter_g);
 
    upgrade_server->sockaddrin = *sockaddrin;
    upgrade_server->sockaddrin.sin_family = AF_INET;
@@ -643,26 +642,40 @@ void send_status_requests_task(void *pvParameters) {
          continue;
       }
 
-      char signal_strength[4];
-      sprintf(signal_strength, "%d", signal_strength_g);
+      char signal_strength[5];
+      snprintf(signal_strength, 5, "%d", signal_strength_g);
       char *device_name = get_string_from_rom(DEVICE_NAME);
-      char errors_counter[5];
-      sprintf(errors_counter, "%d", errors_counter_g);
-      char uptime[10];
-      sprintf(uptime, "%d", milliseconds_counter_g / MILLISECONDS_COUNTER_DIVIDER);
+      char errors_counter[6];
+      snprintf(errors_counter, 6, "%u", errors_counter_g);
+      char uptime[11];
+      snprintf(uptime, 11, "%u", milliseconds_counter_g / MILLISECONDS_COUNTER_DIVIDER);
       char build_timestamp[30];
-      sprintf(build_timestamp, "%s", __TIMESTAMP__);
-      char *status_info_request_payload_template_parameters[] = {signal_strength, device_name, errors_counter, uptime, build_timestamp, NULL};
+      snprintf(build_timestamp, 30, "%s", __TIMESTAMP__);
+      char free_heap_space[7];
+      snprintf(free_heap_space, 7, "%u", xPortGetFreeHeapSize());
+      char *reset_reason = "";
+
+      if (!read_flag(general_flags, FIRST_STATUS_INFO_SENT_FLAG)) {
+         set_flag(&general_flags, FIRST_STATUS_INFO_SENT_FLAG);
+
+         reset_reason = generate_reset_reason();
+      }
+
+      char *status_info_request_payload_template_parameters[] =
+            {signal_strength, device_name, errors_counter, uptime, build_timestamp, free_heap_space, reset_reason, NULL};
       char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD);
       char *request_payload = set_string_parameters(status_info_request_payload_template, status_info_request_payload_template_parameters);
 
       FREE(device_name);
       FREE(status_info_request_payload_template);
+      if (strlen(reset_reason) > 1) {
+         FREE(reset_reason);
+      }
 
       char *request_template = get_string_from_rom(STATUS_INFO_POST_REQUEST);
       unsigned short request_payload_length = strnlen(request_payload, 0xFFFF);
-      char request_payload_length_string[3];
-      sprintf(request_payload_length_string, "%d", request_payload_length);
+      char request_payload_length_string[4];
+      snprintf(request_payload_length_string, 4, "%d", request_payload_length);
       char *server_ip_address = get_string_from_rom(SERVER_IP_ADDRESS);
       char *request_template_parameters[] = {request_payload_length_string, server_ip_address, request_payload, NULL};
       char *request = set_string_parameters(request_template, request_template_parameters);
@@ -675,8 +688,9 @@ void send_status_requests_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__);
-      struct connection_user_data *user_data = (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__);
+      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__, milliseconds_counter_g);
+      struct connection_user_data *user_data =
+            (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__, milliseconds_counter_g);
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
@@ -764,8 +778,9 @@ void send_general_request_task(void *pvParameters) {
       printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
-      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__);
-      struct connection_user_data *user_data = (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__);
+      struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__, milliseconds_counter_g);
+      struct connection_user_data *user_data =
+            (struct connection_user_data *) ZALLOC(sizeof(struct connection_user_data), __LINE__, milliseconds_counter_g);
 
       user_data->response_received = false;
       user_data->timeout_request_supervisor_task = NULL;
@@ -811,56 +826,6 @@ void wifi_event_handler_callback(System_Event_t *event) {
    }
 }
 
-void set_default_wi_fi_settings() {
-   wifi_station_set_auto_connect(false);
-   wifi_station_set_reconnect_policy(false);
-   wifi_station_dhcpc_stop();
-   wifi_set_opmode(STATION_MODE);
-
-   STATION_STATUS station_status = wifi_station_get_connect_status();
-   if (station_status == STATION_GOT_IP) {
-      wifi_station_disconnect();
-   }
-
-   struct station_config station_config_settings;
-
-   wifi_station_get_config_default(&station_config_settings);
-
-   char *default_access_point_name = get_string_from_rom(ACCESS_POINT_NAME);
-   char *default_access_point_password = get_string_from_rom(ACCESS_POINT_PASSWORD);
-
-   if (strncmp(default_access_point_name, station_config_settings.ssid, 32) != 0
-         || strncmp(default_access_point_password, station_config_settings.password, 64) != 0) {
-      struct station_config station_config_settings_to_save;
-
-      memcpy(&station_config_settings_to_save.ssid, default_access_point_name, 32);
-      memcpy(&station_config_settings_to_save.password, default_access_point_password, 64);
-      wifi_station_set_config(&station_config_settings_to_save);
-   }
-   FREE(default_access_point_name);
-   FREE(default_access_point_password);
-
-   struct ip_info current_ip_info;
-   wifi_get_ip_info(STATION_IF, &current_ip_info);
-   char *current_ip = ipaddr_ntoa(&current_ip_info.ip);
-   char *own_ip_address = get_string_from_rom(OWN_IP_ADDRESS);
-
-   if (strncmp(current_ip, own_ip_address, 15) != 0) {
-      char *own_netmask = get_string_from_rom(OWN_NETMASK);
-      char *own_getaway_address = get_string_from_rom(OWN_GETAWAY_ADDRESS);
-      struct ip_info ip_info_to_set;
-
-      ip_info_to_set.ip.addr = ipaddr_addr(own_ip_address);
-      ip_info_to_set.netmask.addr = ipaddr_addr(own_netmask);
-      ip_info_to_set.gw.addr = ipaddr_addr(own_getaway_address);
-      wifi_set_ip_info(STATION_IF, &ip_info_to_set);
-      FREE(own_netmask);
-      FREE(own_getaway_address);
-   }
-   FREE(current_ip);
-   FREE(own_ip_address);
-}
-
 void ignore_alarms() {
    set_flag(&general_flags, IGNORE_ALARMS_FLAG);
    os_timer_disarm(&ignore_alarms_timer_g);
@@ -887,7 +852,7 @@ void recheck_false_alarm_callback() {
    if (!read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
       // Alarm still wasn't sent
       ignore_false_alarms();
-      //xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
+      xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
    }
 }
 

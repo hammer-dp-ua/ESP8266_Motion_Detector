@@ -27,6 +27,7 @@
 #define IGNORE_FALSE_ALARMS_FLAG                   32
 #define IGNORE_MOTION_DETECTOR_FLAG                64
 #define MANUALLY_IGNORE_ALARMS_FLAG                128
+#define FIRST_STATUS_INFO_SENT_FLAG                256
 
 #define REQUEST_IDLE_TIME_ON_ERROR              (10000 / portTICK_RATE_MS) // 10 sec
 #define REQUEST_MAX_DURATION_TIME               (10000 / portTICK_RATE_MS) // 10 sec
@@ -62,9 +63,11 @@ char STATUS_INFO_POST_REQUEST[] ICACHE_RODATA_ATTR =
 char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
       "{\"gain\":\"<1>\","
       "\"deviceName\":\"<2>\","
-      "\"errors\":\"<3>\","
-      "\"uptime\":\"<4>\","
-      "\"buildTimestamp\":\"<5>\"}";
+      "\"errors\":<3>,"
+      "\"uptime\":<4>,"
+      "\"buildTimestamp\":\"<5>\","
+      "\"freeHeapSpace\":<6>,"
+      "\"resetReason\":\"<7>\"}";
 char ALARM_GET_REQUEST[] ICACHE_RODATA_ATTR =
       "GET /server/esp8266/alarm?alarmSource=<1> HTTP/1.1\r\n"
       "Host: <2>\r\n"
