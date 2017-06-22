@@ -29,9 +29,10 @@
 #define MANUALLY_IGNORE_ALARMS_FLAG                128
 #define FIRST_STATUS_INFO_SENT_FLAG                256
 
-#define REQUEST_IDLE_TIME_ON_ERROR              (10000 / portTICK_RATE_MS) // 10 sec
-#define REQUEST_MAX_DURATION_TIME               (10000 / portTICK_RATE_MS) // 10 sec
-#define STATUS_REQUESTS_SEND_INTERVAL           (30000 / portTICK_RATE_MS) // 30 sec
+#define REQUEST_IDLE_TIME_ON_ERROR        (10000 / portTICK_RATE_MS) // 10 sec
+#define REQUEST_MAX_DURATION_TIME         (10000 / portTICK_RATE_MS) // 10 sec
+#define STATUS_REQUESTS_SEND_INTERVAL_MS  (30 * 1000)
+#define STATUS_REQUESTS_SEND_INTERVAL     (STATUS_REQUESTS_SEND_INTERVAL_MS / portTICK_RATE_MS) // 30 sec
 
 #define IGNORE_MOTION_DETECTOR_TIMEOUT_AFTER_TURN_ON_SEC 60
 
@@ -60,7 +61,7 @@ char STATUS_INFO_POST_REQUEST[] ICACHE_RODATA_ATTR =
       "Connection: close\r\n"
       "Accept: application/json\r\n\r\n"
       "<3>\r\n";
-char STATUS_INFO_REQUEST_PAYLOAD[] ICACHE_RODATA_ATTR =
+char STATUS_INFO_REQUEST_PAYLOAD_TEMPLATE[] ICACHE_RODATA_ATTR =
       "{\"gain\":\"<1>\","
       "\"deviceName\":\"<2>\","
       "\"errors\":<3>,"
@@ -94,7 +95,7 @@ struct connection_user_data {
    bool response_received;
    char *request;
    char *response;
-   void (*execute_on_succeed)(struct espconn *connection);
+   void (*execute_on_disconnect)(struct espconn *connection);
    void (*execute_on_error)(struct espconn *connection);
    xTaskHandle timeout_request_supervisor_task;
    xTaskHandle parent_task;
@@ -104,8 +105,7 @@ struct connection_user_data {
 void scan_access_point_task(void *pvParameters);
 void send_long_polling_requests_task(void *pvParameters);
 void autoconnect_task(void *pvParameters);
-void activate_status_requests_task_task(void *pvParameters);
-void send_status_requests_task(void *pvParameters);
+void send_status_info_request_task(void *pvParameters);
 void send_general_request_task(void *pvParameters);
 void beep_task();
 void successfull_connected_tcp_handler_callback(void *arg);
@@ -116,10 +116,13 @@ void tcp_request_successfully_sent_handler_callback();
 void tcp_request_successfully_written_into_buffer_handler_callback();
 void upgrade_firmware();
 void establish_connection(struct espconn *connection);
-void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphores_to_give[]);
+void request_finish_action(struct espconn *connection);
 void pins_interrupt_handler();
 void stop_ignoring_alarms_timer_callback();
 void stop_ignoring_false_alarms_timer_callback();
 void recheck_false_alarm_callback();
+void disconnect_connection_task(void *pvParameters);
+void schedule_sending_status_info();
+bool check_to_continue();
 
 #endif

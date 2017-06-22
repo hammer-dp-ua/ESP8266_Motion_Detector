@@ -28,6 +28,7 @@ LOCAL os_timer_t pin_state_timers_g[16];
 LOCAL os_timer_t ignore_alarms_timer_g;
 LOCAL os_timer_t ignore_false_alarms_timer_g;
 LOCAL os_timer_t recheck_false_alarm_timer_g;
+LOCAL os_timer_t status_sender_timer_g;
 
 struct _esp_tcp user_tcp;
 
@@ -35,7 +36,6 @@ unsigned char responses_index;
 char *responses[10];
 unsigned int general_flags;
 
-xSemaphoreHandle status_request_semaphore_g;
 xSemaphoreHandle requests_mutex_g;
 xSemaphoreHandle buzzer_semaphore_g;
 
@@ -150,12 +150,23 @@ void scan_access_point_task(void *pvParameters) {
 
 void autoconnect_task(void *pvParameters) {
    long task_delay = 10000 / portTICK_RATE_MS;
+   unsigned char connecting_attempts = 0;
 
    for (;;) {
       STATION_STATUS status = wifi_station_get_connect_status();
-      read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN);
+
       if (status != STATION_GOT_IP && status != STATION_CONNECTING) {
          wifi_station_connect(); // Do not call this API in user_init
+      }
+
+      if (status == STATION_CONNECTING) {
+         connecting_attempts++;
+      } else {
+         connecting_attempts = 0;
+      }
+
+      if (connecting_attempts >= 10) {
+         wifi_station_disconnect();
       }
       vTaskDelay(task_delay);
    }
@@ -223,9 +234,10 @@ void successfull_disconnected_tcp_handler_callback(void *arg) {
    printf("Disconnected callback beginning. Response %s received. Time: %u\n", response_received ? "has been" : "has not been", milliseconds_counter_g);
    #endif
 
-   void (*execute_on_succeed)(struct espconn *connection) = user_data->execute_on_succeed;
-   if (execute_on_succeed) {
-      execute_on_succeed(connection);
+   void (*execute_on_disconnect)(struct espconn *connection) = user_data->execute_on_disconnect;
+
+   if (execute_on_disconnect) {
+      execute_on_disconnect(connection);
    }
 }
 
@@ -236,6 +248,7 @@ void tcp_connection_error_handler_callback(void *arg, sint8 err) {
 
    struct espconn *connection = arg;
    struct connection_user_data *user_data = connection->reserve;
+
    void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
    if (execute_on_error) {
       execute_on_error(connection);
@@ -259,18 +272,17 @@ void tcp_response_received_handler_callback(void *arg, char *pdata, unsigned sho
          user_data->response = response;
 
          #ifdef ALLOW_USE_PRINTF
-         printf("Response received: %sTime: %u\n", pdata, milliseconds_counter_g);
+         printf("Response has been received: %sTime: %u\n", "", milliseconds_counter_g);
          #endif
       }
       FREE(server_sent);
    }
-
-   // Don't call this API in any espconn callback. If needed, please use system task to trigger espconn_disconnect.
-   //espconn_disconnect(connection);
 }
 
 void tcp_request_successfully_sent_handler_callback() {
-   //printf("Request sent callback\n");
+   #ifdef ALLOW_USE_PRINTF
+   printf("Request sent callback\n");
+   #endif
 }
 
 void tcp_request_successfully_written_into_buffer_handler_callback() {
@@ -285,8 +297,7 @@ void status_request_on_error_callback(struct espconn *connection) {
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle semaphores_to_give[] = {status_request_semaphore_g, requests_mutex_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
+   request_finish_action(connection);
 }
 
 void general_request_on_error_callback(struct espconn *connection) {
@@ -297,8 +308,7 @@ void general_request_on_error_callback(struct espconn *connection) {
    errors_counter_g++;
    pin_output_reset(SERVER_AVAILABILITY_STATUS_LED_PIN);
    set_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-   xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
+   request_finish_action(connection);
 }
 
 void check_for_update_firmware(char *response) {
@@ -321,35 +331,9 @@ void check_for_manually_ignoring_alarms(char *response) {
    FREE(manually_ignore_alarms_json_element);
 }
 
-void status_request_on_succeed_callback(struct espconn *connection) {
+void status_request_on_disconnect_callback(struct espconn *connection) {
    #ifdef ALLOW_USE_PRINTF
-   printf("status_request_on_succeed_callback, Time: %u\n", milliseconds_counter_g);
-   #endif
-
-   struct connection_user_data *user_data = connection->reserve;
-
-   if (!user_data->response_received && user_data->execute_on_error != NULL) {
-      user_data->execute_on_error(connection);
-      return;
-   }
-
-   check_for_update_firmware(user_data->response);
-   check_for_manually_ignoring_alarms(user_data->response);
-
-   pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
-   xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
-
-   xTaskCreate(activate_status_requests_task_task, "activate_status_requests_task_task", 200, NULL, 2, NULL);
-
-   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
-      upgrade_firmware();
-   }
-}
-
-void general_request_on_succeed_callback(struct espconn *connection) {
-   #ifdef ALLOW_USE_PRINTF
-   printf("general_request_on_succeed_callback. Time: %u\n", milliseconds_counter_g);
+   printf("status_request_on_disconnect_callback, Time: %u\n", milliseconds_counter_g);
    #endif
 
    struct connection_user_data *user_data = connection->reserve;
@@ -360,13 +344,43 @@ void general_request_on_succeed_callback(struct espconn *connection) {
       return;
    }
 
+   if (parent_task != NULL) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("parent task of status request is to be deleted...\n");
+      #endif
+
+      vTaskDelete(parent_task);
+   }
+
    check_for_update_firmware(user_data->response);
+   check_for_manually_ignoring_alarms(user_data->response);
 
    pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
+   request_finish_action(connection);
+
+   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
+      upgrade_firmware();
+   } else {
+      schedule_sending_status_info();
+   }
+}
+
+void general_request_on_disconnect_callback(struct espconn *connection) {
+   #ifdef ALLOW_USE_PRINTF
+   printf("general_request_on_disconnect_callback. Time: %u\n", milliseconds_counter_g);
+   #endif
+
+   struct connection_user_data *user_data = connection->reserve;
+   xTaskHandle parent_task = user_data->parent_task;
+
+   if (!user_data->response_received && user_data->execute_on_error != NULL) {
+      user_data->execute_on_error(connection);
+      return;
+   }
 
    if (parent_task != NULL) {
       #ifdef ALLOW_USE_PRINTF
-      printf("parent task is to be deleted...\n");
+      printf("parent task of general request to be deleted...\n");
       #endif
 
       vTaskDelete(parent_task);
@@ -376,54 +390,57 @@ void general_request_on_succeed_callback(struct espconn *connection) {
       xSemaphoreGive(buzzer_semaphore_g);
    }
 
-   xSemaphoreHandle semaphores_to_give[] = {requests_mutex_g, NULL};
-   request_finish_action(connection, semaphores_to_give);
+   check_for_update_firmware(user_data->response);
+   pin_output_set(SERVER_AVAILABILITY_STATUS_LED_PIN);
+   request_finish_action(connection);
 }
 
-void request_finish_action(struct espconn *connection, xSemaphoreHandle semaphores_to_give[]) {
+void request_finish_action(struct espconn *connection) {
    struct connection_user_data *user_data = connection->reserve;
 
    if (user_data->request != NULL) {
       FREE(user_data->request);
-      user_data->request = NULL;
    }
    if (user_data->response != NULL) {
       FREE(user_data->response);
-      user_data->response = NULL;
    }
 
    if (user_data->timeout_request_supervisor_task != NULL) {
       #ifdef ALLOW_USE_PRINTF
-      printf("\n timeout_request_supervisor_task still exists\n");
+      printf("\ntimeout_request_supervisor_task still exists\n");
       #endif
 
       vTaskDelete(user_data->timeout_request_supervisor_task);
    }
 
    FREE(user_data);
-   sint8 error_code = espconn_delete(connection);
 
-   if (error_code != 0) {
-      #ifdef ALLOW_USE_PRINTF
-      printf("\n ERROR! Connection still is in progress\n");
-      #endif
-   }
+   xTaskCreate(disconnect_connection_task, "disconnect_connection_task", 180, connection, 1, NULL);
+}
 
+void disconnect_connection_task(void *pvParameters) {
+   struct espconn *connection = pvParameters;
+
+   #ifdef ALLOW_USE_PRINTF
+   remot_info* pcon_info = NULL;
+
+   espconn_get_connection_info(connection, &pcon_info, 0);
+   printf("current connection status before removing: %u\n", pcon_info->state);
+   #endif
+
+   espconn_regist_disconcb(connection, NULL);
+   espconn_disconnect(connection); // Don't call this API in any espconn callback
+   espconn_delete(connection);
    FREE(connection);
-
-   if (semaphores_to_give != NULL) {
-      unsigned char i;
-      for (i = 0; semaphores_to_give[i] != NULL; i++) {
-         xSemaphoreHandle semaphore_to_give = semaphores_to_give[i];
-         xSemaphoreGive(semaphore_to_give);
-      }
-   }
 
    #if defined(ALLOW_USE_PRINTF) && defined(USE_MALLOC_LOGGER)
    printf("\n Elements amount in malloc logger list: %u\n", get_malloc_logger_list_elements_amount());
    print_not_empty_elements_lines();
    printf("\n Free Heap size: %u\n", xPortGetFreeHeapSize());
    #endif
+
+   xSemaphoreGive(requests_mutex_g);
+   vTaskDelete(NULL);
 }
 
 void timeout_request_supervisor_task(void *pvParameters) {
@@ -436,18 +453,11 @@ void timeout_request_supervisor_task(void *pvParameters) {
    printf("\n Request timeout. Time: %u\n", milliseconds_counter_g);
    #endif
 
-   if (connection->state == ESPCONN_CONNECT) {
-      #ifdef ALLOW_USE_PRINTF
-      printf("\n Was connected\n");
-      #endif
-
-      espconn_disconnect(connection);
-   }
-
    // To not delete this task in other functions
    user_data->timeout_request_supervisor_task = NULL;
 
    void (*execute_on_error)(struct espconn *connection) = user_data->execute_on_error;
+
    if (execute_on_error != NULL) {
       execute_on_error(connection);
    }
@@ -546,6 +556,7 @@ void establish_connection(struct espconn *connection) {
    switch (connection_status) {
       case ESPCONN_OK:
       {
+         // Event of espconn_regist_reconcb could be invoked anyway in just a moment
          struct connection_user_data *user_data = connection->reserve;
          xTaskHandle created_supervisor_task;
 
@@ -598,47 +609,25 @@ void establish_connection(struct espconn *connection) {
    }
 }
 
-void activate_status_requests_task_task(void *pvParameters) {
-   vTaskDelay(STATUS_REQUESTS_SEND_INTERVAL);
-   xSemaphoreGive(status_request_semaphore_g);
-   vTaskDelete(NULL);
+void send_status_info() {
+   xTaskCreate(send_status_info_request_task, "send_status_info_task", 300, NULL, 1, NULL);
 }
 
-void send_status_requests_task(void *pvParameters) {
+void schedule_sending_status_info() {
+   os_timer_disarm(&status_sender_timer_g);
+   os_timer_setfn(&status_sender_timer_g, (os_timer_func_t *) send_status_info, NULL);
+   os_timer_arm(&status_sender_timer_g, STATUS_REQUESTS_SEND_INTERVAL_MS, false);
+}
+
+void send_status_info_request_task(void *pvParameters) {
    #ifdef ALLOW_USE_PRINTF
-   printf("send_status_requests_task has been created\n");
+   printf("send_status_info_request_task has been created\n");
    #endif
-   vTaskDelay(5000 / portTICK_RATE_MS);
 
    for (;;) {
-      xSemaphoreTake(status_request_semaphore_g, portMAX_DELAY);
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
 
-      if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
-         vTaskDelete(NULL);
-      }
-
-      #ifdef ALLOW_USE_PRINTF
-      printf("send_status_requests_task started. Time: %u\n", milliseconds_counter_g);
-      #endif
-
-      if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
-         #ifdef ALLOW_USE_PRINTF
-         printf("Can't send status request, because not connected to AP. Time: %u\n", milliseconds_counter_g);
-         #endif
-
-         xSemaphoreGive(requests_mutex_g);
-         xSemaphoreGive(status_request_semaphore_g);
-         vTaskDelay(2000 / portTICK_RATE_MS);
-         continue;
-      }
-
-      if (read_flag(general_flags, REQUEST_ERROR_OCCURRED_FLAG)) {
-         reset_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-
-         xSemaphoreGive(requests_mutex_g);
-         xSemaphoreGive(status_request_semaphore_g);
-         vTaskDelay(REQUEST_IDLE_TIME_ON_ERROR);
+      if (!check_to_continue()) {
          continue;
       }
 
@@ -663,7 +652,7 @@ void send_status_requests_task(void *pvParameters) {
 
       char *status_info_request_payload_template_parameters[] =
             {signal_strength, device_name, errors_counter, uptime, build_timestamp, free_heap_space, reset_reason, NULL};
-      char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD);
+      char *status_info_request_payload_template = get_string_from_rom(STATUS_INFO_REQUEST_PAYLOAD_TEMPLATE);
       char *request_payload = set_string_parameters(status_info_request_payload_template, status_info_request_payload_template_parameters);
 
       FREE(device_name);
@@ -696,8 +685,9 @@ void send_status_requests_task(void *pvParameters) {
       user_data->timeout_request_supervisor_task = NULL;
       user_data->request = request;
       user_data->response = NULL;
-      user_data->execute_on_succeed = status_request_on_succeed_callback;
+      user_data->execute_on_disconnect = status_request_on_disconnect_callback;
       user_data->execute_on_error = status_request_on_error_callback;
+      user_data->parent_task = xTaskGetCurrentTaskHandle();
       user_data->request_max_duration_time = REQUEST_MAX_DURATION_TIME;
       connection->reserve = user_data;
       connection->type = ESPCONN_TCP;
@@ -727,32 +717,13 @@ void send_general_request_task(void *pvParameters) {
    printf("\n send_general_request_task has been created. Time: %u\n", milliseconds_counter_g);
    #endif
 
-   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
-      vTaskDelete(NULL);
-   }
-
    GeneralRequestType request_type = (GeneralRequestType) pvParameters;
 
    for (;;) {
       xSemaphoreTake(requests_mutex_g, portMAX_DELAY);
 
-      #ifdef ALLOW_USE_PRINTF
-      printf("\n send_general_request_task started. Time: %u\n", milliseconds_counter_g);
-      #endif
-
-      if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
-         #ifdef ALLOW_USE_PRINTF
-         printf("\n Can't send general request, because not connected to AP. Time: %u\n", milliseconds_counter_g);
-         #endif
-
-         vTaskDelay(2000 / portTICK_RATE_MS);
+      if (!check_to_continue()) {
          continue;
-      }
-
-      if (read_flag(general_flags, REQUEST_ERROR_OCCURRED_FLAG)) {
-         reset_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
-
-         vTaskDelay(REQUEST_IDLE_TIME_ON_ERROR);
       }
 
       char *request_template = NULL;
@@ -775,7 +746,7 @@ void send_general_request_task(void *pvParameters) {
       FREE(server_ip_address);
 
       #ifdef ALLOW_USE_PRINTF
-      printf("Request created:\n<<<\n%s>>>\n", request);
+      //printf("Request created:\n<<<\n%s>>>\n", request);
       #endif
 
       struct espconn *connection = (struct espconn *) ZALLOC(sizeof(struct espconn), __LINE__, milliseconds_counter_g);
@@ -786,7 +757,7 @@ void send_general_request_task(void *pvParameters) {
       user_data->timeout_request_supervisor_task = NULL;
       user_data->request = request;
       user_data->response = NULL;
-      user_data->execute_on_succeed = general_request_on_succeed_callback;
+      user_data->execute_on_disconnect = general_request_on_disconnect_callback;
       user_data->execute_on_error = general_request_on_error_callback;
       user_data->parent_task = xTaskGetCurrentTaskHandle();
       user_data->request_max_duration_time = REQUEST_MAX_DURATION_TIME;
@@ -811,6 +782,35 @@ void send_general_request_task(void *pvParameters) {
 
       establish_connection(connection);
    }
+}
+
+bool check_to_continue() {
+   if (read_flag(general_flags, UPDATE_FIRMWARE_FLAG)) {
+      vTaskDelete(NULL);
+   }
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("task started. Time: %u\n", milliseconds_counter_g);
+   #endif
+
+   if (!read_output_pin_state(AP_CONNECTION_STATUS_LED_PIN)) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("Can't send request, because not connected to AP. Time: %u\n", milliseconds_counter_g);
+      #endif
+
+      xSemaphoreGive(requests_mutex_g);
+      vTaskDelay(5000 / portTICK_RATE_MS);
+      return false;
+   }
+
+   if (read_flag(general_flags, REQUEST_ERROR_OCCURRED_FLAG)) {
+      reset_flag(&general_flags, REQUEST_ERROR_OCCURRED_FLAG);
+
+      xSemaphoreGive(requests_mutex_g);
+      vTaskDelay(REQUEST_IDLE_TIME_ON_ERROR);
+      return false;
+   }
+   return true;
 }
 
 void wifi_event_handler_callback(System_Event_t *event) {
@@ -852,7 +852,7 @@ void recheck_false_alarm_callback() {
    if (!read_flag(general_flags, IGNORE_FALSE_ALARMS_FLAG)) {
       // Alarm still wasn't sent
       ignore_false_alarms();
-      xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
+      //xTaskCreate(send_general_request_task, "send_general_request_task", 256, (void *) FALSE_ALARM, 1, NULL);
    }
 }
 
@@ -983,11 +983,9 @@ void user_init(void) {
    xTaskCreate(autoconnect_task, "autoconnect_task", 256, NULL, 1, NULL);
    xTaskCreate(scan_access_point_task, "scan_access_point_task", 256, NULL, 1, NULL);
 
-   vSemaphoreCreateBinary(status_request_semaphore_g);
-   xSemaphoreGive(status_request_semaphore_g);
    requests_mutex_g = xSemaphoreCreateMutex();
 
-   xTaskCreate(send_status_requests_task, "send_status_requests_task", 256, NULL, 1, NULL);
+   schedule_sending_status_info();
 
    //xTaskCreate(testing_task, "testing_task", 200, NULL, 1, NULL);
 }

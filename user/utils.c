@@ -247,12 +247,10 @@ char *generate_reset_reason() {
    snprintf(depc, 11, HEXADECIMAL_ADDRESS_FORMAT, rst_info->depc);
    char rtn_addr[11];
    snprintf(rtn_addr, 11, HEXADECIMAL_ADDRESS_FORMAT, rst_info->rtn_addr);
-   char rtc_time[11];
-   snprintf(rtc_time, 11, "%u", system_get_rtc_time());
    char *used_software = system_upgrade_userbin_check() ? "user2.bin" : "user1.bin";
 
    char *reset_reason_template = get_string_from_rom(RESET_REASON_TEMPLATE);
-   char *reset_reason_template_parameters[] = {reason, cause, epc_1, epc_2, epc_3, excvaddr, depc, rtn_addr, rtc_time, used_software, NULL};
+   char *reset_reason_template_parameters[] = {reason, cause, epc_1, epc_2, epc_3, excvaddr, depc, rtn_addr, used_software, NULL};
    char *reset_reason = set_string_parameters(reset_reason_template, reset_reason_template_parameters);
    FREE(reset_reason_template);
    return reset_reason;
