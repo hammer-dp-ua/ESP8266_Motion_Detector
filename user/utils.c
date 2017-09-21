@@ -1,15 +1,15 @@
 #include "utils.h"
 
-void set_flag(unsigned int *flags, unsigned int flag_value) {
-   *flags |= flag_value;
+void set_flag(unsigned int *flags, unsigned int flag) {
+   *flags |= flag;
 }
 
-void reset_flag(unsigned int *flags, unsigned int flag_value) {
-   *flags &= ~(*flags & flag_value);
+void reset_flag(unsigned int *flags, unsigned int flag) {
+   *flags &= ~(*flags & flag);
 }
 
-bool read_flag(unsigned int flags, unsigned int flag_value) {
-   return (flags & flag_value) ? true : false;
+bool read_flag(unsigned int flags, unsigned int flag) {
+   return (flags & flag) ? true : false;
 }
 
 /**
@@ -256,15 +256,17 @@ char *generate_reset_reason() {
    return reset_reason;
 }
 
+// Do not call this function in user_init because of wifi_station_disconnect and wifi_station_connect
 void set_default_wi_fi_settings() {
+   wifi_set_opmode(STATION_MODE);
    wifi_station_set_auto_connect(false);
    wifi_station_set_reconnect_policy(false);
    wifi_station_dhcpc_stop();
-   wifi_set_opmode(STATION_MODE);
 
-   STATION_STATUS station_status = wifi_station_get_connect_status();
-   if (station_status == STATION_GOT_IP) {
-      wifi_station_disconnect();
+   if (wifi_station_disconnect()) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("Disconnected from AP\n");
+      #endif
    }
 
    struct station_config station_config_settings;
@@ -289,6 +291,10 @@ void set_default_wi_fi_settings() {
    char *own_ip_address = get_string_from_rom(OWN_IP_ADDRESS);
 
    if (strncmp(current_ip, own_ip_address, 15) != 0) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("Current IP address: %s\n", current_ip);
+      #endif
+
       char *own_netmask = get_string_from_rom(OWN_NETMASK);
       char *own_getaway_address = get_string_from_rom(OWN_GETAWAY_ADDRESS);
       struct ip_info ip_info_to_set;
@@ -302,6 +308,12 @@ void set_default_wi_fi_settings() {
    }
    FREE(current_ip);
    FREE(own_ip_address);
+
+   if (wifi_station_connect()) {
+      #ifdef ALLOW_USE_PRINTF
+      printf("Connected to AP\n");
+      #endif
+   }
 }
 
 /**
@@ -330,4 +342,39 @@ bool read_output_pin_state(unsigned int pin) {
  */
 bool read_input_pin_state(unsigned int pin) {
    return (GPIO_REG_READ(GPIO_IN_ADDRESS) & pin) ? true : false;
+}
+
+LOCAL unsigned int replace_zeroes(unsigned int to_be_replaced_value) {
+   unsigned char bits;
+   unsigned int to_be_replaced_value_tmp = to_be_replaced_value;
+
+   for (bits = 0; bits <= 32 && to_be_replaced_value_tmp > 0; bits++) {
+      to_be_replaced_value_tmp >>= 1;
+   }
+
+   #ifdef ALLOW_USE_PRINTF
+   printf("bits: %u\n", bits);
+   #endif
+
+   unsigned int returning_value = 0;
+   while (bits > 0) {
+      returning_value <<= 1;
+      returning_value |= 1;
+      bits--;
+   }
+   return returning_value;
+}
+
+unsigned int generate_rand(unsigned int min_value, unsigned int max_value) {
+   unsigned int generated_random = rand();
+   unsigned int max_value_with_replaced_zeroes = replace_zeroes(max_value);
+   unsigned int final_random = generated_random & max_value_with_replaced_zeroes;
+
+   if (final_random > max_value) {
+      return max_value;
+   } else if (final_random < min_value) {
+      return min_value;
+   } else {
+      return final_random;
+   }
 }

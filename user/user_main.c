@@ -963,6 +963,11 @@ void testing_task(void *pvParameters) {
    }
 }
 
+void set_default_wi_fi_settings_task(void *pvParameters) {
+   set_default_wi_fi_settings();
+   vTaskDelete(NULL);
+}
+
 void user_init(void) {
    pins_config();
    turn_motion_detector_off();
@@ -977,7 +982,7 @@ void user_init(void) {
    #endif
 
    wifi_set_event_handler_cb(wifi_event_handler_callback);
-   set_default_wi_fi_settings();
+   xTaskCreate(set_default_wi_fi_settings_task, "set_default_wi_fi_settings_task", 256, NULL, 1, NULL);
    espconn_init();
 
    xTaskCreate(autoconnect_task, "autoconnect_task", 256, NULL, 1, NULL);
